@@ -420,13 +420,14 @@ handles strongly non-normal far blocks. `results[k]` carries `(λ, disc, cluster
 
 REMARK (full spectral gap vs eigenvalue isolation). This certifies each leading eigenvalue
 ISOLATED — a small circle `Γᵢ` around it contains no other eigenvalue. That is NOT yet the
-full SPECTRAL GAP of the discretized operator: the gap (λ₁ separated from the ENTIRE rest of
-`σ(A)`) requires certifying `σ_min(A − zI) > 0` on a single circle `Γ_gap` that ENCLOSES ALL
-the other eigenvalues — equivalently `σ_min(z − G₂₂) > 0` on a contour enclosing the whole far
-spectrum `σ(G₂₂)` (the **Nisoli Gauss certification**: a rigorous resolvent bound on a curve
-enclosing the spectrum). It is the SAME far-block primitive (`far_block_sigma_min`), run on the
-bulk-enclosing circle instead of the per-eigenvalue circles — and it is the binding, harder
-step for strongly non-normal operators (the far block's pseudospectrum reaches across the gap).
+SPECTRAL GAP. Once `λ₁,…,λ_k` are the certified leading eigenvalues, the gap separating that
+block from the rest requires ONE further far-block certificate: deflate ALL `k` certified modes
+(`W = V·mr.W[:, 1:k]`, the refined-frame columns) and certify `σ_min(z − G₂₂) > 0` on a circle
+`Γ_gap` enclosing the REMAINING spectrum `λ_{k+1}, λ_{k+2}, …` — equivalently a rigorous
+resolvent bound on a contour enclosing the whole far spectrum `σ(G₂₂)` (the **Nisoli Gauss
+certification**). It is the SAME primitive (`far_block_sigma_min`), run ONCE on the
+bulk-enclosing circle rather than the per-eigenvalue circles, and is the binding, harder step
+for strongly non-normal operators (the far block's pseudospectrum reaches across the gap).
 """
 function certify_leading_eigs(Amul, Aadj, n::Int; nblock::Int = 16, neig::Int = 5,
         refine::Integer = 6, prec::Type = Float64, frac::Real = 0.4, nθ::Int = 24)
