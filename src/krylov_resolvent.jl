@@ -423,9 +423,9 @@ ISOLATED — a small circle `Γᵢ` around it contains no other eigenvalue. That
 SPECTRAL GAP. Once `λ₁,…,λ_k` are the certified leading eigenvalues, the gap separating that
 block from the rest requires ONE further far-block certificate: deflate ALL `k` certified modes
 (`W = V·mr.W[:, 1:k]`, the refined-frame columns) and certify `σ_min(z − G₂₂) > 0` on a circle
-`Γ_gap` enclosing the REMAINING spectrum `λ_{k+1}, λ_{k+2}, …` — equivalently a rigorous
-resolvent bound on a contour enclosing the whole far spectrum `σ(G₂₂)` (the **Nisoli Gauss
-certification**). It is the SAME primitive (`far_block_sigma_min`), run ONCE on the
+`Γ_gap` enclosing the REMAINING spectrum `λ_{k+1}, λ_{k+2}, …` — a rigorous resolvent bound on a
+contour enclosing the whole far spectrum `σ(G₂₂)`, the contour certification of Nisoli (Gauss
+paper, arXiv:2602.19435). It is the SAME primitive (`far_block_sigma_min`), run ONCE on the
 bulk-enclosing circle rather than the per-eigenvalue circles, and is the binding, harder step
 for strongly non-normal operators (the far block's pseudospectrum reaches across the gap).
 """
