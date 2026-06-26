@@ -436,11 +436,13 @@ function certify_leading_eigs(Amul, Aadj, n::Int; nblock::Int = 16, neig::Int = 
     λ = mr.centres
     ord = sortperm(abs.(λ); rev = true)
     done = Set{Int}()
+    leadcols = Int[]                                     # all certified-leading H-columns
     results = NamedTuple[]
     for i in ord[1:min(neig, length(ord))]
         i in done && continue
         cl = mr.clusters[findfirst(c -> i in c.idx, mr.clusters)].idx
         union!(done, cl)
+        append!(leadcols, cl)
         c = λ[i]
         gap = minimum(abs(c - λ[j]) for j in eachindex(λ) if !(j in cl))
         Wi = V * mr.W[:, cl]                             # lift the REFINED cluster frame
@@ -448,7 +450,9 @@ function certify_leading_eigs(Amul, Aadj, n::Int; nblock::Int = 16, neig::Int = 
             prec = prec, auto_radius = true, nθ = nθ)
         push!(results, (; λ = c, disc = mr.radii[i], cluster = length(cl), cert))
     end
-    return (; mr, βN, results)
+    # the certified-leading frame, for a subsequent certify_gap (separation from the fast spectrum)
+    Wlead = V * mr.W[:, sort(unique(leadcols))]
+    return (; mr, βN, results, V, Wlead, Hritz = λ[ord])
 end
 
 function certify_leading_eigs(A::AbstractMatrix; kwargs...)
@@ -467,9 +471,11 @@ spectrum, given the certified leading frame `Wslow` (`n×k`, e.g. `V·mr.W[:,1:k
 `certify_leading_eigs`). The far block `G₂₂ = P_W A P_W` (`P_W = I − Wslow Wslow*`) is handled
 by its dominant SINGULAR subspace rather than a direct `σ_min` Lanczos:
 
-  * run the eigenvalue scheme on the HERMITIAN Gram `G₂₂*G₂₂` (matvec `x ↦ G₂₂*(G₂₂ x)`) to
-    capture the `k'` dominant singular values `Σ` and right vectors `V_g`; `U_g = G₂₂ V_g/Σ`.
-    The uncaptured singular values are the residual `‖E‖ = σ_{k'+1}` (≈0 for low-rank far blocks).
+  * Arnoldi-compress the HERMITIAN Gram `G₂₂*G₂₂` (matvec `x ↦ G₂₂*(G₂₂ x)`) and CERTIFY its
+    leading eigenvalues with `miyajima_rump` (refined frame, the same Rump–Miyajima scheme) on
+    that upper-left corner → the `k'` dominant singular values² `Σ²` (certified discs) and refined
+    right vectors `V_g`; `U_g = G₂₂ V_g/Σ`. The residual `‖E‖ = σ_{k'+1}` (largest uncaptured disc
+    upper end + the Gram Arnoldi residual) is ≈0 for low-rank far blocks.
   * `(U_g Σ V_g* − zI)` is block-diagonal w.r.t. `span[U_g,V_g]` and its complement (where it is
     `−zI`), so `σ_min(U_gΣV_g* − zI) = min(σ_min(B − zI), |z|)`, `B = Q*(U_gΣV_g*)Q` a small
     `≤2k'` SVD. Hence `σ_min(G₂₂ − zI) ≥ min(σ_min(B−zI), |z|) − ‖E‖`.
@@ -481,21 +487,38 @@ all the structure lives in the few large singular directions (a small dense SVD)
 Ritz estimate — Float64, the candidate.)
 """
 function certify_gap(Amul, Aadj, n::Int, Wslow::AbstractMatrix, radius::Real;
-        kgram::Int = 40, nθ::Int = 64, tol::Real = 1e-8)
+        kgram::Int = 40, nθ::Int = 64, tol::Real = 1e-8, refine::Integer = 6)
     W = _frame(Wslow)
     Pw(x) = x .- W * (W' * x)
     G22mul(x) = Pw(Amul(Pw(x)))
     G22adj(x) = Pw(Aadj(Pw(x)))
     Gram(x) = G22adj(G22mul(x))                          # Hermitian PSD, eigenvalues = σ(G₂₂)²
 
+    # CERTIFY the dominant singular values² on the UPPER-LEFT CORNER of G₂₂*G₂₂ with the same
+    # Rump–Miyajima scheme: miyajima_rump certifies the eigenvalues σ², and (the Gram being
+    # Hermitian) the ORTHONORMAL eigenvectors are the right singular vectors. The certified
+    # discs give the σ² with rigorous bounds; the orthonormal vectors give the geometry.
     Hg, Vb, _ = _arnoldi(Gram, n, min(kgram, n - size(W, 2) - 1))
-    E = eigen(Hermitian((Hg + Hg') / 2))
-    σ2 = real.(E.values)
-    ord = sortperm(σ2; rev = true)
-    keep = [i for i in ord if σ2[i] > tol * σ2[ord[1]]]  # dominant singular values²
-    nrest = length(ord) - length(keep)
-    Enorm = sqrt(max(0.0, nrest > 0 ? σ2[ord[length(keep) + 1]] : 0.0))   # ‖E‖ = σ_{k'+1}
-    Vg = Vb * E.vectors[:, keep]                         # right singular vectors
+    mrg = miyajima_rump(ComplexF64.(Hg); refine = refine, kappa_mode = :svdbox)
+    Eg = eigen(Hermitian((Hg + Hg') / 2))               # orthonormal eigenvectors of the corner
+    pe = sortperm(real.(Eg.values); rev = true)
+    σ2 = sort(real.(mrg.centres); rev = true)           # CERTIFIED Gram eigenvalues = σ(G₂₂)²
+    keep = findall(>(tol * σ2[1]), σ2)                  # dominant singular values²
+    Vg = Vb * Eg.vectors[:, pe[keep]]                   # orthonormal right singular vectors
+    # residual ‖E‖ = σ_{k'+1}(G₂₂) = ‖G₂₂(I−V_gV_g*)‖ = √λ_max(P_⊥ G₂₂*G₂₂ P_⊥) — the largest
+    # singular value OUTSIDE the captured subspace, by power iteration on the deflated Gram.
+    Pperp(x) = x .- Vg * (Vg' * x)
+    ve = Pperp(randn(ComplexF64, n))
+    ve ./= norm(ve)
+    λe = 0.0
+    for _ in 1:30
+        we = Pperp(Gram(Pperp(ve)))
+        λe = real(dot(ve, we))
+        nw = norm(we)
+        nw <= 0 && break
+        ve = we ./ nw
+    end
+    Enorm = sqrt(max(0.0, λe))
     Σg = sqrt.(max.(σ2[keep], 0.0))
     Ug = reduce(hcat, [G22mul(Vector{ComplexF64}(Vg[:, j])) ./ max(Σg[j], eps())
                        for j in eachindex(Σg)])          # left singular vectors
@@ -515,8 +538,8 @@ function certify_gap(Amul, Aadj, n::Int, Wslow::AbstractMatrix, radius::Real;
     end
     fl = minimum(floors) - 2 * radius * sin(π / (2nθ))
     return fl,
-    (; floor = fl, radius = Float64(radius), Enorm = Enorm,
-        ksing = length(keep), γ = γ, certified = fl > 0)
+    (; floor = fl, radius = Float64(radius), Enorm = Enorm, ksing = length(keep),
+        γ = γ, gram_kappa = mrg.kappa, gram_R2 = mrg.nrmR2, certified = fl > 0)
 end
 
 function certify_gap(A::AbstractMatrix, Wslow::AbstractMatrix, radius::Real; kwargs...)
