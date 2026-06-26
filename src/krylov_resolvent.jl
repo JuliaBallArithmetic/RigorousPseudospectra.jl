@@ -373,7 +373,7 @@ function certify_gap_on_circle(
         x -> A * x, x -> A' * x, size(A, 1), W0, center, radius; kwargs...)
 end
 
-export far_block_sigma_min, certify_leading_eigs
+export far_block_sigma_min, certify_leading_eigs, certify_gap
 
 # ----------------------------------------------------------------------------------------
 # Krylov–Rump–Miyajima decoupling: certify the leading eigenvalues of A isolated.
@@ -453,4 +453,72 @@ end
 
 function certify_leading_eigs(A::AbstractMatrix; kwargs...)
     certify_leading_eigs(x -> A * x, x -> A' * x, size(A, 1); kwargs...)
+end
+
+# ----------------------------------------------------------------------------------------
+# Spectral-gap certificate via the far block's DOMINANT SINGULAR SUBSPACE (Nisoli, Gauss
+# paper arXiv:2602.19435; the recursion applied to G₂₂*G₂₂).
+# ----------------------------------------------------------------------------------------
+"""
+    certify_gap(Amul, Aadj, n, Wslow, radius; kgram=40, nθ=64, tol=1e-8) -> (floor, info)
+
+Certify the SPECTRAL GAP: `σ_min(A − zI) > 0` on the circle `|z| = radius` enclosing the fast
+spectrum, given the certified leading frame `Wslow` (`n×k`, e.g. `V·mr.W[:,1:k]` from
+`certify_leading_eigs`). The far block `G₂₂ = P_W A P_W` (`P_W = I − Wslow Wslow*`) is handled
+by its dominant SINGULAR subspace rather than a direct `σ_min` Lanczos:
+
+  * run the eigenvalue scheme on the HERMITIAN Gram `G₂₂*G₂₂` (matvec `x ↦ G₂₂*(G₂₂ x)`) to
+    capture the `k'` dominant singular values `Σ` and right vectors `V_g`; `U_g = G₂₂ V_g/Σ`.
+    The uncaptured singular values are the residual `‖E‖ = σ_{k'+1}` (≈0 for low-rank far blocks).
+  * `(U_g Σ V_g* − zI)` is block-diagonal w.r.t. `span[U_g,V_g]` and its complement (where it is
+    `−zI`), so `σ_min(U_gΣV_g* − zI) = min(σ_min(B − zI), |z|)`, `B = Q*(U_gΣV_g*)Q` a small
+    `≤2k'` SVD. Hence `σ_min(G₂₂ − zI) ≥ min(σ_min(B−zI), |z|) − ‖E‖`.
+
+Then `σ_min(A − zI) ≥ assemble(σ_slow, σ_far, γ)` on the circle (`σ_slow = σ_min(Wslow*A Wslow −
+zI)`, `γ` the coupling), Lipschitz arc-covered. This SIDESTEPS the non-normal `σ_min` collapse:
+all the structure lives in the few large singular directions (a small dense SVD), the rest is
+`≈|z|`. (For a rigorous tail, `‖E‖` needs a certified upper bound on `σ_{k'+1}`; here it is the
+Ritz estimate — Float64, the candidate.)
+"""
+function certify_gap(Amul, Aadj, n::Int, Wslow::AbstractMatrix, radius::Real;
+        kgram::Int = 40, nθ::Int = 64, tol::Real = 1e-8)
+    W = _frame(Wslow)
+    Pw(x) = x .- W * (W' * x)
+    G22mul(x) = Pw(Amul(Pw(x)))
+    G22adj(x) = Pw(Aadj(Pw(x)))
+    Gram(x) = G22adj(G22mul(x))                          # Hermitian PSD, eigenvalues = σ(G₂₂)²
+
+    Hg, Vb, _ = _arnoldi(Gram, n, min(kgram, n - size(W, 2) - 1))
+    E = eigen(Hermitian((Hg + Hg') / 2))
+    σ2 = real.(E.values)
+    ord = sortperm(σ2; rev = true)
+    keep = [i for i in ord if σ2[i] > tol * σ2[ord[1]]]  # dominant singular values²
+    nrest = length(ord) - length(keep)
+    Enorm = sqrt(max(0.0, nrest > 0 ? σ2[ord[length(keep) + 1]] : 0.0))   # ‖E‖ = σ_{k'+1}
+    Vg = Vb * E.vectors[:, keep]                         # right singular vectors
+    Σg = sqrt.(max.(σ2[keep], 0.0))
+    Ug = reduce(hcat, [G22mul(Vector{ComplexF64}(Vg[:, j])) ./ max(Σg[j], eps())
+                       for j in eachindex(Σg)])          # left singular vectors
+    Q = Matrix(qr(hcat(Ug, Vg)).Q)
+    B = Q' * (Ug * Diagonal(complex.(Σg)) * Vg') * Q     # ≤2k'×2k' block of U Σ V*
+
+    Hs = W' * _applycols(Amul, W)                        # slow block
+    γ = _coupling(Amul, Aadj, W)
+
+    floors = Float64[]
+    for t in 0:(nθ - 1)
+        z = radius * cis(2π * t / nθ)
+        σlr = min(minimum(svdvals(B - z * I)), abs(z))   # σ_min(U_gΣV_g* − zI)
+        σfar = max(0.0, σlr - Enorm)                     # σ_min(G₂₂ − zI)
+        σslow = minimum(svdvals(Hs - z * I))
+        push!(floors, _assemble(σslow, σfar, γ))
+    end
+    fl = minimum(floors) - 2 * radius * sin(π / (2nθ))
+    return fl,
+    (; floor = fl, radius = Float64(radius), Enorm = Enorm,
+        ksing = length(keep), γ = γ, certified = fl > 0)
+end
+
+function certify_gap(A::AbstractMatrix, Wslow::AbstractMatrix, radius::Real; kwargs...)
+    certify_gap(x -> A * x, x -> A' * x, size(A, 1), Wslow, radius; kwargs...)
 end

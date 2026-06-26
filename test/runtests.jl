@@ -493,3 +493,22 @@ end
         @test r.cert.floor <= truemin + 1e-9                     # sound
     end
 end
+
+@testset "spectral-gap certificate via far-block Gram (certify_gap)" begin
+    # low-rank far block: λ₁=1 isolated, a few fast modes, the rest exactly 0.
+    rng = MersenneTwister(11)
+    n = 200
+    λ = vcat(1.0 + 0im, [0.45, 0.40, -0.35, 0.30 + 0.1im, 0.30 - 0.1im],
+        zeros(ComplexF64, n - 6))
+    S = Matrix(qr(randn(rng, ComplexF64, n, n)).Q)
+    A = S * Diagonal(λ) * S' + triu(0.04 .* randn(rng, ComplexF64, n, n), 1)
+    F = eigen(A)
+    i1 = argmax(abs.(F.values))
+    Wslow = reshape(F.vectors[:, i1] / norm(F.vectors[:, i1]), n, 1)
+    rgap = 0.7
+    fl, info = certify_gap(A, Wslow, rgap; kgram = 30, nθ = 48)
+    @test info.certified                                  # gap certified
+    @test fl > 0
+    truemin = minimum(minimum(svdvals(A - rgap * cis(2π * t / 48) * I)) for t in 0:47)
+    @test fl <= truemin + 1e-9                            # sound (floor ≤ true σ_min on Γ_gap)
+end
