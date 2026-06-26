@@ -1,0 +1,4 @@
+[deps]
+BallArithmetic = "77e4f72b-b5a4-4fb0-ac2a-dcc32095a072"
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+RigorousPseudospectra = "63762aec-5db2-4bf6-a1b0-d46a1c2dd8e0"

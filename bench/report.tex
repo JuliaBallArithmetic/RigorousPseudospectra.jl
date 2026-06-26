@@ -1,0 +1,248 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{subcaption}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+\usepackage{microtype}
+
+\graphicspath{{figures/}}
+
+\newcommand{\smin}{\sigma_{\min}}
+\newcommand{\eps}{\varepsilon}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\norm}[1]{\left\|#1\right\|}
+
+\title{\textbf{Certified pseudospectrum enclosure: benchmark report}\\[0.3em]
+\large \texttt{RigorousPseudospectra.jl} --- the box-bisection engine on the test gallery}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+We report the behaviour of the certified $\eps$-pseudospectrum engine on a small
+gallery (normal, Grcar, a defective Jordan block, two non-normal clusters). The
+engine returns, over a region of $\C$, a \emph{rigorous} classification of every
+cell as \emph{outside} $\sigma_\eps(A)$ (resolvent provably small), \emph{inside}
+$\sigma_\eps(A)$, or \emph{unresolved} (the $\eps$-contour at target resolution),
+together with the certificate tier that settled each cell. We validate the
+enclosures against the dense-SVD ground-truth contour, quantify what the cheap
+``free'' formulas alone certify, and measure --- via a worst-block removal sweep
+--- how \emph{localized} each matrix's non-normality is, which is precisely what
+decides whether the method is cheap or reduces to the baseline.
+\end{abstract}
+
+\section{Method in one page}
+
+The deliverable is a certified lower bound on $\smin(A-zI)$ (equivalently an upper
+bound on $\norm{(A-zI)^{-1}}_2$) evaluated cheaply over a region. The sweep is a
+box bisection driven by the $1$-Lipschitz property of $z\mapsto\smin(A-zI)$: a
+single certified centre value settles a whole cell. The lower bound is computed
+\emph{tiered, cheapest-first}.
+
+\paragraph{Cheap floor (the ``free'' formulas).} A certified
+$\smin(A-zI)$ lower bound from a single Schur factorization $A\approx Z\tilde T
+Z^{H}$ (with $Z$ only \emph{approximately} unitary; all residuals carried):
+\[
+  g(z)=\max\bigl(g_{\mathrm{tri}}(z),\;g_{\mathrm{svd}}(z),\;g_{\mathrm{rec}}(z)\bigr).
+\]
+Here $g_{\mathrm{tri}}(z)=\bigl(\min_i(|z-\tilde t_i|-\tau_i)-\norm{S}_2\bigr)/\kappa_2$
+is the free triangular gap (Gershgorin on $\tilde T$, tails $\tau_i=\sum_{j>i}|\tilde
+T_{ij}|$, transported to $A$ through the reduced residual $S$ and the $2$-norm
+conditioning $\kappa_2=\norm{Z}_2\norm{Z^{-1}}_2$, both \emph{computed}, never
+assumed $1$); $g_{\mathrm{rec}}$ is the recentred Gershgorin bound interpolated to
+$\ell^2$; and $g_{\mathrm{svd}}$ is the SVD-frame certificate (one verified SVD,
+reused over $z$).
+
+\paragraph{Exclusion by the maximum principle.} $\norm{(A-zI)^{-1}}$ is
+subharmonic, so on an \emph{eigenvalue-free} cell (certified disjoint from the
+Gershgorin discs of the collapsed matrix) $\smin$ attains its minimum on the
+boundary: certifying $g\ge\eps$ on the $1$-D cell boundary certifies the whole
+$2$-D cell, far tighter than the centre estimate $g(z_0)-r>\eps$.
+
+\paragraph{Inclusion.} A certified $\smin$ \emph{upper} bound,
+$\smin(A-zI)\le\min_i\norm{(A-zI)Z_{:,i}}_2/\norm{Z_{:,i}}_2$ (one precomputed
+$AZ$); $\smin(z_0)+r<\eps$ certifies the cell inside $\sigma_\eps$.
+
+\paragraph{Escalation (block tier).} Only on cells the cheap layers leave
+unresolved, the bound is escalated to a block assembly
+\[
+  \norm{(A-zI)^{-1}}_2 \le \kappa_2\Bigl[(1+\norm{Q}_2\norm{W^{-1}}_2)\norm{P^{-1}}_2+\norm{W^{-1}}_2\Bigr],
+\]
+with $\norm{P^{-1}}_2=1/\smin$ of a small \emph{cluster} block (verified SVD), the
+far block $W$ from the cheap triangular gaps, and the coupling $Q$ a single block
+norm. The cluster is chosen either \emph{globally} (coupling-graph components) or
+\emph{$z$-adaptively} as the failing-gap active set $A(z)=\{i:|z-\tilde
+t_i|-\tau_i\le\text{margin}\}$, cached by signature; the latter localizes
+chain/banded operators that the global graph lumps into one $m=n$ cluster. For a
+whole-matrix cluster the block SVD is the exact $\smin$, tight for both sides.
+
+\section{Certified enclosures}
+
+Figure~\ref{fig:enc} shows the four enclosures; the solid black curve is the true
+$\smin=\eps$ level set (dense SVD). In every case the certified regions
+\emph{bracket} the truth: grey is provably outside, blue provably inside, and the
+true contour lies within the unresolved (red) band. Table~\ref{tab:enc} reports
+the cell counts, the tier that settled each excluded cell, and timings.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{subfigure}[t]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{normal16.png}
+    \caption{\texttt{normal16} --- thin contour, settled entirely by the free layer.}
+  \end{subfigure}\hfill
+  \begin{subfigure}[t]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{grcar32.png}
+    \caption{\texttt{grcar32} --- the kidney-shaped non-normal pseudospectrum.}
+  \end{subfigure}
+
+  \medskip
+  \begin{subfigure}[t]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{jordan8.png}
+    \caption{\texttt{jordan8} --- defective; true contour at $|z|=\eps^{1/8}$.}
+  \end{subfigure}\hfill
+  \begin{subfigure}[t]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{two_clusters.png}
+    \caption{\texttt{two\_clusters} --- two non-normal pseudospectral components.}
+  \end{subfigure}
+  \caption{Certified enclosures. Grey: certified outside $\sigma_\eps$. Blue:
+  certified inside. Red: unresolved boundary cells. Black $\times$: eigenvalues.
+  Solid black curve: true $\smin=\eps$ contour.}
+  \label{fig:enc}
+\end{figure}
+
+\begin{table}[htbp]
+  \centering
+  \begin{tabular}{lrrrrrl}
+    \toprule
+    matrix & $n$ & $\eps$ & excluded & included & boundary & binding tier \\
+    \midrule
+    \texttt{normal16}     & 16 & 0.4 & 586 & 529 & 701 & triangular \\
+    \texttt{grcar32}      & 32 & 0.5 & 576 & 724 & 624 & cluster (574), svd (2) \\
+    \texttt{jordan8}      &  8 & 0.2 & 676 & 696 & 720 & cluster (676) \\
+    \texttt{two\_clusters}&  6 & 0.3 & 510 & 363 & 457 & cluster (507), triangular (3) \\
+    \bottomrule
+  \end{tabular}
+  \caption{Enclosure statistics. The routing makes the cost structure visible: the
+  normal matrix is settled entirely by the free (triangular) layer; the non-normal
+  and clustered ones escalate to the block (cluster) tier. Without escalation the
+  latter are $\approx 95\%$ unresolved.}
+  \label{tab:enc}
+\end{table}
+
+\section{What the free formulas alone certify}
+
+At each $z$, the cheap floor $g(z)$ is itself the \emph{best $\eps$ certifiable
+from the formulas alone}: $z\notin\sigma_\eps$ for every $\eps<g(z)$. Where
+$g(z)\le 0$ the formulas certify nothing. Figure~\ref{fig:free} shows $g$ (left)
+against the true $\smin$ (right) for Grcar; the red curve $g=0$ is the failure
+boundary. Table~\ref{tab:free} quantifies the gap: for the normal matrix the free
+estimate is \emph{exact} everywhere, while for Grcar it certifies a positive
+$\eps$ on only $5\%$ of the box --- the off-diagonal mass blinds the formulas to a
+$\smin$ that is in fact large.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.92\textwidth]{free_grcar32.png}
+  \caption{\texttt{grcar32}: the free certified bound $g(z)$ (left) vs.\ true
+  $\smin$ (right), same colour scale. $g$ fails (dark; red $=g{=}0$) over $\approx
+  95\%$ of the box, although the true $\smin$ is large there.}
+  \label{fig:free}
+\end{figure}
+
+\begin{table}[htbp]
+  \centering
+  \begin{tabular}{lrrr}
+    \toprule
+    matrix & free works ($g>0$) & max free $\eps$ & max true $\smin$ \\
+    \midrule
+    \texttt{normal16}     & 100\% & 3.25 & 3.25 \\
+    \texttt{grcar32}      &   5\% & 0.90 & 2.56 \\
+    \texttt{jordan8}      &  36\% & 0.56 & 0.67 \\
+    \texttt{two\_clusters}&  40\% & 1.27 & 1.57 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Reach of the free formulas: fraction of the box where $g>0$, the
+  largest free-certifiable $\eps$, and the true maximum $\smin$.}
+  \label{tab:free}
+\end{table}
+
+\section{Removing the worst block}
+
+The free triangular gap is dragged negative by the eigenvalues with the largest
+tails $\tau_i$ --- exactly the block the cluster path hands to a verified SVD.
+Dropping that block and recomputing the gap over the kept eigenvalues
+(Figure~\ref{fig:reduced}, a diagnostic --- it ignores the dropped eigenvalues, so
+it is not a certified bound for $A$) reveals how much of the plane the free
+formula recovers once the worst block is set aside (Table~\ref{tab:reduced}).
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.99\textwidth]{free_reduced_grcar32.png}
+  \caption{\texttt{grcar32}: free gap over all eigenvalues (left), over the kept
+  eigenvalues after dropping the worst-tail block (middle; red diamonds = dropped,
+  white $\times$ = kept), and true $\smin$ (right). Removing the worst quarter
+  pushes the failure boundary in only modestly --- Grcar has no single culprit.}
+  \label{fig:reduced}
+\end{figure}
+
+\begin{table}[htbp]
+  \centering
+  \begin{tabular}{lrrrr}
+    \toprule
+    matrix & dropped & tail threshold & free works (all) & free works (worst removed) \\
+    \midrule
+    \texttt{normal16}     & 4/16 & 0.00 & 100\% & 100\% \\
+    \texttt{grcar32}      & 8/32 & 3.05 &   5\% & 17\% \\
+    \texttt{jordan8}      & 0/8  & 1.00 &  36\% & 36\% \\
+    \texttt{two\_clusters}& 1/6  & 2.00 &  40\% & 51\% \\
+    \bottomrule
+  \end{tabular}
+  \caption{Free-estimate reach before/after removing the highest-tail block (top
+  quartile). \texttt{two\_clusters} has a removable culprit; \texttt{grcar}/%
+  \texttt{jordan} are uniformly non-normal.}
+  \label{tab:reduced}
+\end{table}
+
+\section{How localized is the non-normality?}
+
+Removing the worst eigenvalues one fraction at a time and tracking the free-works
+percentage (Figure~\ref{fig:sweep}) gives a fingerprint of localization, which
+predicts whether the method is cheap. A sharp early rise (\texttt{two\_clusters})
+means a small worst block carries the non-normality: the $z$-adaptive active set
+is small, so escalation is cheap and tight. A flat/late rise (\texttt{grcar},
+\texttt{jordan}) means the non-normality is spread across nearly all eigenvalues:
+no small block helps, the active set is essentially the whole matrix, and
+escalation reduces to a full-size verified SVD --- the baseline cost. The normal
+matrix is flat at $100\%$.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.78\textwidth]{free_removal_sweep.png}
+  \caption{Free-estimate recovery vs.\ fraction of worst-tail eigenvalues removed.
+  Curve shape $=$ localization fingerprint: early rise $\Rightarrow$ localized
+  (cheap, tight escalation); slow/step rise $\Rightarrow$ uniform (escalation
+  $\to$ baseline SVD).}
+  \label{fig:sweep}
+\end{figure}
+
+\section{Summary}
+
+The engine is rigorous on every example (the certified regions never cross the
+true contour) and \emph{fails gracefully}: where the cheap certificates cannot
+resolve a cell it reports ``unresolved'' rather than guessing. It is a genuine win
+for normal/near-normal matrices (settled entirely by the free $O(n)$ layer, thin
+contour) and for matrices with \emph{localized} non-normality (a few small
+clusters, escalated by small block SVDs). For \emph{globally} non-normal matrices
+such as Grcar there is no cheap win: the block is the whole matrix and the method
+matches the dense-SVD baseline --- but it remains correct, and the routing and
+localization diagnostics above predict this outcome in advance from the off-%
+diagonal structure alone.
+
+\end{document}

@@ -1,0 +1,20 @@
+name = "RigorousPseudospectra"
+uuid = "63762aec-5db2-4bf6-a1b0-d46a1c2dd8e0"
+authors = ["Isaia Nisoli <nisoli@im.ufrj.br>"]
+version = "0.1.0"
+
+[deps]
+BallArithmetic = "77e4f72b-b5a4-4fb0-ac2a-dcc32095a072"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+
+[compat]
+BallArithmetic = "0.2"
+LinearAlgebra = "1.10"
+julia = "1.10"
+
+[extras]
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Test = "8dfed614-5729-5b62-bb73-8f89d75bee26"
+
+[targets]
+test = ["Test", "Random"]

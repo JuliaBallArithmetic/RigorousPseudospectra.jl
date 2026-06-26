@@ -1,0 +1,26 @@
+# Julia
+/Manifest.toml
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+/docs/build/
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+*.bbl
+*.blg
+*.pdf
+
+# large data caches and generated artifacts (regenerable; keep the repo lean)
+*.jls
+*.pdf
+*.png
+*.jpeg
+*.synctex.gz
+bench/figures/
