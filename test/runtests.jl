@@ -520,3 +520,32 @@ end
     for t in 0:47)
     @test fl <= truemin + 1e-9                            # sound (floor ≤ true σ_min on Γ_gap)
 end
+
+@testset "certify_gap: peeling near-circle eigenvalues into the dense block" begin
+    # NON-NORMAL far block with eigenvalues NEAR the circle r=0.72. Krylov on G₂₂ peels them
+    # into the exact dense block ⇒ the residual far block becomes easy (large σ_min). Compare
+    # margin=1 (no peel) to margin=0.7 (peel): both certify, peeling is tighter + faster.
+    setprecision(BigFloat, 160)
+    rng = MersenneTwister(7)
+    n = 70
+    ev = Complex{BigFloat}[1.0, 0.60, 0.58, -0.55, 0.20, 0.15]
+    m = length(ev)
+    B = diagm(ev) + Complex{BigFloat}.(triu(0.06 * ones(m, m), 1))   # mild non-normal
+    Q = Matrix(qr(randn(rng, Complex{BigFloat}, n, m)).Q)
+    A = Q * B * Q'
+    F = eigen(ComplexF64.(A))
+    i1 = argmax(abs.(F.values))
+    Wslow = Complex{BigFloat}.(reshape(F.vectors[:, i1] / norm(F.vectors[:, i1]), n, 1))
+    rgap = BigFloat(0.72)
+    fl1, i1n = certify_gap(x -> A * x, x -> A' * x, n, Wslow, rgap;
+        nθ = 64, prec = BigFloat, margin = 1.0)         # no peeling
+    flp, ip = certify_gap(x -> A * x, x -> A' * x, n, Wslow, rgap;
+        nθ = 64, prec = BigFloat, margin = 0.7)          # peel near-circle modes
+    @test i1n.certified && ip.certified                  # both certify
+    @test ip.ncaptured > i1n.ncaptured                   # peeling augmented the dense block
+    @test ip.σ22min > 5 * i1n.σ22min                     # residual far block far easier
+    @test flp >= fl1 - 1e-9                              # peeling no looser
+    truemin = minimum(minimum(svdvals(ComplexF64.(A) - 0.72 * cis(2π * t / 64) * I))
+    for t in 0:63)
+    @test flp <= truemin + 1e-9                          # sound
+end

@@ -30,7 +30,7 @@ instead dies once γ is large, which it is for non-normal transfer operators).
 
 THE FAR BLOCK BY MATVEC — σ₂₂ = σ_min(G22 − zI)
 -----------------------------------------------
-σ_min(G22−zI) = √(λ_min(M_z)) with the HERMITIAN  M_z = P₂₂ (G22−zI)*(G22−zI) P₂₂.
+σ_min(G22−zI) = √(λ_min(M_z)) with the HERMITIAN  M_z = P₂₂ (G22−zI)'(G22−zI) P₂₂.
 M_z is applied purely by matvecs of A and its adjoint Aᵀ (plus the rank-1 P₂₂); G22 is
 never formed. λ_min(M_z) is obtained by Lanczos on M_z. Two subtleties, both handled:
 
@@ -482,40 +482,57 @@ end
 
 # ----------------------------------------------------------------------------------------
 # Spectral-gap certificate (Nisoli, Gauss paper arXiv:2602.19435): σ_min(A−zI) certified on a
-# circle ENCLOSING the fast spectrum, by SAMPLING the circle and running the rigorous matvec
-# far-block certificate at each sample. Unlike the per-eigenvalue isolation circles — certified
-# once at the centre + Lipschitz — the bulk circle around 0 cannot use a centre evaluation
-# (σ_min(0−G₂₂)=σ_min(G₂₂)≈0 for the near-singular far block), so EACH point on the circle is
-# certified separately and stitched by the 1-Lipschitz arc-cover. Sampling is the expensive part.
+# circle ENCLOSING the fast spectrum. KEY: σ_min(z−G₂₂) is small precisely AT the eigenvalues of
+# G₂₂ near the circle (resolvent poles / the non-normal pseudospectrum reaching Γ). So PEEL those
+# into the dense block by Krylov on G₂₂ ITSELF — which converges to the largest-|λ| eigenvalues,
+# exactly the near-circle poles ("computing away the bad eigenvalues"), and is z-INDEPENDENT (done
+# once). This beats Krylov on M_z=(z−G₂₂)'(z−G₂₂), which converges to the extreme SINGULAR values
+# (the large, good ones) and wastes effort. After peeling, the residual far block sits deep inside
+# Γ, so σ_min(z−G₂₂') is LARGE and certifies in few steps; the near-circle smallness is carried
+# EXACTLY by the (small dense) augmented block via svdbox. Circle closed by a 1-Lipschitz arc-cover.
 # ----------------------------------------------------------------------------------------
 """
-    certify_gap(Amul, Aadj, n, Wslow, radius; center=0, nθ=64, prec=Float64, kmax=0,
-                nullshift=10.0, reorth=true) -> (floor, info)
+    certify_gap(Amul, Aadj, n, Wslow, radius; center=0, margin=0.75, nblock=24, maxlevels=8,
+                nθ=64, prec=Float64, kmax=0, nullshift=10.0, reorth=true) -> (floor, info)
 
-Certify the SPECTRAL GAP: `σ_min(A − zI) > 0` on the circle `Γ = {center + radius·e^{iθ}}`
-enclosing the fast spectrum `λ_{k+1},…`, given the certified leading frame `Wslow` (`n×k`,
-e.g. `V·mr.W[:,1:k]` from `certify_leading_eigs`). RIGOROUS, matvec-only — the same algorithm
-as the isolation circles, but sampled around Γ rather than Lipschitz-covered from a centre:
+Certify the SPECTRAL GAP `σ_min(A − zI) > 0` on the circle `Γ = {center + radius·e^{iθ}}`
+enclosing the fast spectrum, given the certified leading frame `Wslow`. RIGOROUS, matvec-only.
 
-  * at each of `nθ` samples `z_j` on Γ, the far block `σ_min(G₂₂ − z_jI)` (`G₂₂ = P_W A P_W`)
-    is certified by `far_block_sigma_min` — the matvec Lanczos on `M_{z_j}=(G₂₂−z_jI)*(G₂₂−z_jI)`
-    with Paige `‖R₂‖`, selective reorthogonalization, and the deviation-lemma floor;
-  * the captured block `σ_slow = σ_min(Wslow*A Wslow − z_jI)` is a VERIFIED small SVD (`svdbox`);
-  * assembled with the certified coupling `γ`: `σ_min(A−z_jI) ≥ σ_slow σ_far/(σ_slow+σ_far+γ)`;
-  * `σ_min(A−zI)` is 1-Lipschitz in `z`, so the whole circle is covered by
-    `min_j floor(z_j) − 2·radius·sin(π/2nθ)`.
+PEEL-then-certify (eigenvalue-targeted): `σ_min(z−G₂₂)` is small only near the eigenvalues of
+`G₂₂` next to Γ. Krylov on `G₂₂ = P_W A P_W` converges to those (largest `|λ|`) first, so we
+augment `W` with the Ritz vectors of every Ritz value with `|λ| ≥ margin·radius` and repeat,
+until the residual spectral radius is inside `margin·radius`. This is `z`-INDEPENDENT (done once).
+Then on each of `nθ` samples `z_j` on Γ:
 
-The bulk circle needs per-sample evaluation (no centre shortcut — `σ_min(0−G₂₂)≈0` for the
-near-singular far block); this is the expensive part (`nθ` far-block Lanczos). `prec=BigFloat`
-for strongly non-normal far blocks. For dense `A` the small SVDs / coupling are certified via
-`BallArithmetic`; for a pure matvec operator the matvecs are the Float64 candidate (a ball
-matvec is the remaining rigorous upgrade).
+  * `σ_min(H'−z_j)` of the augmented dense block `H' = W*AW` — VERIFIED `svdbox`; carries the
+    near-circle smallness EXACTLY, no Lanczos;
+  * `σ_min(z_j−G₂₂')` of the RESIDUAL far block via `far_block_sigma_min`, now LARGE (spectrum
+    deep inside Γ) so few Lanczos steps suffice;
+  * assembled with the certified coupling `γ`; the circle is closed by `min_j floor(z_j) −
+    2·radius·sin(π/2nθ)` (`σ_min(A−zI)` is 1-Lipschitz).
+
+`margin` (≈0.7–0.8) sets how far inside Γ the residual must sit; smaller ⇒ more peeled into the
+exact dense block ⇒ cheaper/larger residual `σ_min`. `prec=BigFloat` for strongly non-normal
+residuals. `info.ncaptured` is the augmented block size. For dense `A` the small SVDs / coupling
+are certified via `BallArithmetic`; a ball matvec is the remaining rigorous upgrade.
 """
 function certify_gap(Amul, Aadj, n::Int, Wslow::AbstractMatrix, radius::Real;
-        center::Number = 0, nθ::Int = 64, prec::Type = Float64,
-        kmax::Int = 0, nullshift::Real = 10.0, reorth::Bool = true)
+        center::Number = 0, margin::Real = 0.75, nblock::Int = 24, maxlevels::Int = 8,
+        nθ::Int = 64, prec::Type = Float64, kmax::Int = 0, nullshift::Real = 10.0,
+        reorth::Bool = true)
     W = _frame(Wslow)
-    H = _captured_block(Amul, W)                         # slow block W*AW
+    rthresh = margin * Float64(radius)
+    # PEEL the near-circle eigenvalues of G₂₂ into W — Krylov on G₂₂, z-independent, done once.
+    for _ in 1:maxlevels
+        size(W, 2) >= n - nblock - 2 && break
+        G22mul = x -> (Px = x .- W * (W' * x); y = ComplexF64.(Amul(Px)); y .- W * (W' * y))
+        Hg, Vg, _ = _arnoldi(G22mul, n, min(nblock, n - size(W, 2) - 1))
+        E = eigen(Hg)
+        near = findall(λ -> abs(λ) >= rthresh, E.values)
+        isempty(near) && break
+        W = _frame(hcat(W, Vg * E.vectors[:, near]))
+    end
+    H = _captured_block(Amul, W)                         # augmented dense block W*AW
     γ = _coupling_cert(Amul, Aadj, W)                    # certified upper bound on the coupling
     floors = Float64[]
     R2max = 0.0
@@ -532,7 +549,8 @@ function certify_gap(Amul, Aadj, n::Int, Wslow::AbstractMatrix, radius::Real;
     fl = minimum(floors) - 2 * radius * sin(π / (2nθ))
     return fl,
     (; floor = fl, radius = Float64(radius), center = ComplexF64(center), γ = γ,
-        R2 = R2max, σ22min = σ22min, nθ = nθ, certified = (fl > 0 && R2max < 1))
+        R2 = R2max, σ22min = σ22min, ncaptured = size(W, 2), nθ = nθ,
+        certified = (fl > 0 && R2max < 1))
 end
 
 function certify_gap(A::AbstractMatrix, Wslow::AbstractMatrix, radius::Real; kwargs...)
