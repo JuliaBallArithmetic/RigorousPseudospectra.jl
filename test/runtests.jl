@@ -494,10 +494,10 @@ end
     end
 end
 
-@testset "spectral-gap certificate (certify_gap): rigorous sampling + svdbox" begin
-    # LOW-RANK far block: a 6×6 non-normal block (λ₁=1 + fast modes) embedded by a BigFloat-
-    # native isometry, the rest exactly 0 ⇒ G₂₂ (deflate λ₁) is rank 5. BigFloat-native so the
-    # matvec is rank-accurate and the relative breakdown fires (k≈rank ⇒ fast, bounded memory).
+@testset "certify_gap: large block + block-diagonal resolvent + deep far block" begin
+    # LOW-RANK A (rank 6): a 6×6 non-normal block (λ₁=1 + fast modes) embedded by a BigFloat-
+    # native isometry, the rest 0. Arnoldi breaks at the rank, miyajima_rump block-diagonalizes
+    # the small block, the far block is ≈0 (deep). nsep=1: separate λ₁=1 from the rest.
     setprecision(BigFloat, 160)
     rng = MersenneTwister(11)
     n = 80
@@ -506,25 +506,21 @@ end
           0 0 0 0 0.30+0.1im 0.1; 0 0 0 0 0 0.30-0.1im]
     Q = Matrix(qr(randn(rng, Complex{BigFloat}, n, 6)).Q)
     A = Q * Complex{BigFloat}.(Bd) * Q'
-    F = eigen(ComplexF64.(A))
-    i1 = argmax(abs.(F.values))
-    Wslow = Complex{BigFloat}.(reshape(F.vectors[:, i1] / norm(F.vectors[:, i1]), n, 1))
-    rgap = BigFloat(0.7)
-    fl, info = certify_gap(
-        x -> A * x, x -> A' * x, n, Wslow, rgap; nθ = 48, prec = BigFloat)
+    rgap = 0.7                                            # separate λ₁=1 from |λ|≤0.45
+    fl, info = certify_gap(x -> A * x, x -> A' * x, n; nsep = 1, radius = rgap,
+        nθ = 48, prec = BigFloat)
     @test info.certified                                  # gap certified
     @test fl > 0
     @test info.R2 < 1                                     # far-block Neumann valid at every sample
-    Af = ComplexF64.(A)
-    truemin = minimum(minimum(svdvals(Af - Float64(rgap) * cis(2π * t / 48) * I))
+    truemin = minimum(minimum(svdvals(ComplexF64.(A) - rgap * cis(2π * t / 48) * I))
     for t in 0:47)
     @test fl <= truemin + 1e-9                            # sound (floor ≤ true σ_min on Γ_gap)
 end
 
-@testset "certify_gap: peeling near-circle eigenvalues into the dense block" begin
-    # NON-NORMAL far block with eigenvalues NEAR the circle r=0.72. Krylov on G₂₂ peels them
-    # into the exact dense block ⇒ the residual far block becomes easy (large σ_min). Compare
-    # margin=1 (no peel) to margin=0.7 (peel): both certify, peeling is tighter + faster.
+@testset "certify_gap: separate leading nsep, near-circle modes carried by the block" begin
+    # NON-NORMAL spectrum with modes near the circle. nsep=4 separates {1,0.6,0.58,0.55} from
+    # {0.2,0.15}; the auto-radius lands in that gap, the block-diagonal resolvent carries the
+    # near-circle smallness exactly, and the far block is ≈0.
     setprecision(BigFloat, 160)
     rng = MersenneTwister(7)
     n = 70
@@ -533,19 +529,12 @@ end
     B = diagm(ev) + Complex{BigFloat}.(triu(0.06 * ones(m, m), 1))   # mild non-normal
     Q = Matrix(qr(randn(rng, Complex{BigFloat}, n, m)).Q)
     A = Q * B * Q'
-    F = eigen(ComplexF64.(A))
-    i1 = argmax(abs.(F.values))
-    Wslow = Complex{BigFloat}.(reshape(F.vectors[:, i1] / norm(F.vectors[:, i1]), n, 1))
-    rgap = BigFloat(0.72)
-    fl1, i1n = certify_gap(x -> A * x, x -> A' * x, n, Wslow, rgap;
-        nθ = 64, prec = BigFloat, margin = 1.0)         # no peeling
-    flp, ip = certify_gap(x -> A * x, x -> A' * x, n, Wslow, rgap;
-        nθ = 64, prec = BigFloat, margin = 0.7)          # peel near-circle modes
-    @test i1n.certified && ip.certified                  # both certify
-    @test ip.ncaptured > i1n.ncaptured                   # peeling augmented the dense block
-    @test ip.σ22min > 5 * i1n.σ22min                     # residual far block far easier
-    @test flp >= fl1 - 1e-9                              # peeling no looser
-    truemin = minimum(minimum(svdvals(ComplexF64.(A) - 0.72 * cis(2π * t / 64) * I))
+    fl, info = certify_gap(x -> A * x, x -> A' * x, n; nsep = 4, nθ = 64, prec = BigFloat)
+    @test info.certified                                  # gap certified
+    @test fl > 0
+    @test info.R2 < 1
+    @test 0.2 < info.radius < 0.55                        # auto-radius in the |λ₄|–|λ₅| gap
+    truemin = minimum(minimum(svdvals(ComplexF64.(A) - info.radius * cis(2π * t / 64) * I))
     for t in 0:63)
-    @test flp <= truemin + 1e-9                          # sound
+    @test fl <= truemin + 1e-9                            # sound
 end
