@@ -117,8 +117,12 @@ function lanczos_pro(Mz, n::Int, kmax::Int; v0 = nothing, reorth::Bool = true)
     # relative breakdown / numerical-rank threshold: stop when the residual is tiny vs the
     # running ‖T‖. For a far block with low effective rank (M_z = |z|²I + low-rank, the noise-
     # smoothed regime) the Krylov subspace becomes invariant early — a HAPPY breakdown, which is
-    # completeness (sound). Without this, BigFloat's tiny u·|a| floor never fires and the run
-    # grinds to k≈n on rounding noise (and the basis below would blow up to O(n²)).
+    # completeness (sound). The threshold tracks the OPERATOR's precision, not the working one: a
+    # Float64-precision matvec (e.g. a Float64 transfer matrix promoted to BigFloat) floors the
+    # residual at ~1e-15·‖T‖, so a BigFloat √u (≈1e-24) would never fire and the run grinds to
+    # k≈n with an O(n²) basis. `max(√u, 1e-12)` fires at the operator's numerical rank instead
+    # (still sound: σ_min is certified down to ~1e-12·‖T‖, below the Float64 operator's own floor).
+    breaktol = max(trig, R(1e-12))
     Tnorm = zero(R)
 
     α = zeros(R, kmax)
@@ -183,7 +187,7 @@ function lanczos_pro(Mz, n::Int, kmax::Int; v0 = nothing, reorth::Bool = true)
         Tnorm = max(Tnorm, abs(a) + b + βprev)
         # breakdown: absolute (a true zero residual) OR relative (numerical rank / happy
         # breakdown) — the Krylov subspace is invariant, hence COMPLETE for the deviation lemma.
-        if !isfinite(b) || b <= u * abs(a) || b <= trig * Tnorm
+        if !isfinite(b) || b <= u * abs(a) || b <= breaktol * Tnorm
             kact = k
             break
         end
