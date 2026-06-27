@@ -494,25 +494,29 @@ end
     end
 end
 
-@testset "spectral-gap certificate via far-block Gram (certify_gap)" begin
-    # genuinely LOW-RANK non-normal operator: a 6×6 non-normal block (λ₁=1 + fast modes)
-    # embedded by a random isometry, the rest exactly 0 ⇒ G₂₂ (deflate λ₁) is rank 5.
+@testset "spectral-gap certificate (certify_gap): rigorous sampling + svdbox" begin
+    # LOW-RANK far block: a 6×6 non-normal block (λ₁=1 + fast modes) embedded by a BigFloat-
+    # native isometry, the rest exactly 0 ⇒ G₂₂ (deflate λ₁) is rank 5. BigFloat-native so the
+    # matvec is rank-accurate and the relative breakdown fires (k≈rank ⇒ fast, bounded memory).
+    setprecision(BigFloat, 160)
     rng = MersenneTwister(11)
-    n = 200
-    B = [1.0+0im 0.3 0.2 0.1 0.05 0.05; 0 0.45 0.2 0.1 0.05 0.05;
-         0 0 0.40 0.15 0.05 0.05; 0 0 0 -0.35 0.1 0.05;
-         0 0 0 0 0.30+0.1im 0.1; 0 0 0 0 0 0.30-0.1im]
-    Q = Matrix(qr(randn(rng, ComplexF64, n, 6)).Q)
-    A = Q * B * Q'
-    F = eigen(A)
+    n = 80
+    Bd = [1.0+0im 0.3 0.2 0.1 0.05 0.05; 0 0.45 0.2 0.1 0.05 0.05;
+          0 0 0.40 0.15 0.05 0.05; 0 0 0 -0.35 0.1 0.05;
+          0 0 0 0 0.30+0.1im 0.1; 0 0 0 0 0 0.30-0.1im]
+    Q = Matrix(qr(randn(rng, Complex{BigFloat}, n, 6)).Q)
+    A = Q * Complex{BigFloat}.(Bd) * Q'
+    F = eigen(ComplexF64.(A))
     i1 = argmax(abs.(F.values))
-    Wslow = reshape(F.vectors[:, i1] / norm(F.vectors[:, i1]), n, 1)
-    rgap = 0.7
-    fl, info = certify_gap(A, Wslow, rgap; kgram = 30, nθ = 48)
+    Wslow = Complex{BigFloat}.(reshape(F.vectors[:, i1] / norm(F.vectors[:, i1]), n, 1))
+    rgap = BigFloat(0.7)
+    fl, info = certify_gap(
+        x -> A * x, x -> A' * x, n, Wslow, rgap; nθ = 48, prec = BigFloat)
     @test info.certified                                  # gap certified
     @test fl > 0
-    @test info.ksing == 5                                 # captured the rank-5 far block
-    @test info.Enorm < 1e-8                               # residual ≈ 0 (genuinely low rank)
-    truemin = minimum(minimum(svdvals(A - rgap * cis(2π * t / 48) * I)) for t in 0:47)
+    @test info.R2 < 1                                     # far-block Neumann valid at every sample
+    Af = ComplexF64.(A)
+    truemin = minimum(minimum(svdvals(Af - Float64(rgap) * cis(2π * t / 48) * I))
+    for t in 0:47)
     @test fl <= truemin + 1e-9                            # sound (floor ≤ true σ_min on Γ_gap)
 end

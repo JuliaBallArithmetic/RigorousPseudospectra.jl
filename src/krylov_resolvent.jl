@@ -74,6 +74,7 @@ covers any smaller circle / nearby |z| — it need only be repeated per spectral
 =#
 
 using LinearAlgebra
+using BallArithmetic
 
 export krylov_resolvent_floor, certify_gap_on_circle, KrylovCircleCertificate
 
@@ -113,6 +114,12 @@ function lanczos_pro(Mz, n::Int, kmax::Int; v0 = nothing, reorth::Bool = true)
     trig = sqrt(u)          # semi-orthogonality threshold (reorth is triggered above this)
     keepθ = u^(R(3) / 4)    # flag columns above this for the reorth set
     reset = 2u              # ω reset value after reorthogonalizing against a column
+    # relative breakdown / numerical-rank threshold: stop when the residual is tiny vs the
+    # running ‖T‖. For a far block with low effective rank (M_z = |z|²I + low-rank, the noise-
+    # smoothed regime) the Krylov subspace becomes invariant early — a HAPPY breakdown, which is
+    # completeness (sound). Without this, BigFloat's tiny u·|a| floor never fires and the run
+    # grinds to k≈n on rounding noise (and the basis below would blow up to O(n²)).
+    Tnorm = zero(R)
 
     α = zeros(R, kmax)
     β = zeros(R, kmax)
@@ -128,14 +135,15 @@ function lanczos_pro(Mz, n::Int, kmax::Int; v0 = nothing, reorth::Bool = true)
     kact = kmax
 
     # MEMORY NOTE. The ‖R₂‖ bound and the floor are STREAMED (Paige scalars + the tridiagonal),
-    # needing no basis. Reorthogonalization, however, touches earlier columns. For clarity this
-    # reference retains the basis (`cols`, O(nk)); in practice only the FEW directions whose Ritz
-    # value converges ever get flagged, so a production variant keeps just those (Parlett–Scott
-    # selective orthogonalization against converged Ritz vectors) and is nearly memory-free.
-    cols = Vector{Vector{T}}(undef, kmax)
+    # needing no basis. Reorthogonalization touches earlier columns, so the basis `cols` is kept
+    # only when `reorth=true`. With the relative breakdown above, a low-rank far block stops at
+    # its effective rank (small `kact`), so `cols` is O(n·rank), not O(n²); for a genuinely high-
+    # rank far block at large n this still grows and wants thick-restart (separate work). With
+    # `reorth=false` (pure 3-term, e.g. BigFloat that stays semi-orthogonal) nothing is stored.
+    cols = reorth ? Vector{Vector{T}}(undef, kmax) : Vector{Vector{T}}()
 
     for k in 1:kmax
-        cols[k] = q
+        reorth && (cols[k] = q)
         W[k, k] = u
         w = Mz(q)
         a = real(dot(q, w))
@@ -172,7 +180,10 @@ function lanczos_pro(Mz, n::Int, kmax::Int; v0 = nothing, reorth::Bool = true)
 
         b = norm(r)
         β[k] = b
-        if !isfinite(b) || b <= u * abs(a)               # Lanczos breakdown
+        Tnorm = max(Tnorm, abs(a) + b + βprev)
+        # breakdown: absolute (a true zero residual) OR relative (numerical rank / happy
+        # breakdown) — the Krylov subspace is invariant, hence COMPLETE for the deviation lemma.
+        if !isfinite(b) || b <= u * abs(a) || b <= trig * Tnorm
             kact = k
             break
         end
@@ -234,6 +245,16 @@ function _coupling(Amul, Aadj, W)
         opnorm(defl(_applycols(Aadj, W)), 2))                  # ‖P₂₂ A* W‖
 end
 
+# VERIFIED σ_min lower bound of a (complex) matrix via the rigorous SVD (BallArithmetic.svdbox).
+_sigma_min_cert(M::AbstractMatrix) = _sigmin_lower(BallMatrix(Matrix(M)))
+
+# CERTIFIED upper bound on the coupling γ = max(‖P₂₂AW‖₂, ‖P₂₂A*W‖₂) (verified L² opnorm).
+function _coupling_cert(Amul, Aadj, W)
+    defl(M) = M .- W * (W' * M)
+    return max(upper_bound_L2_opnorm(BallMatrix(defl(_applycols(Amul, W)))),
+        upper_bound_L2_opnorm(BallMatrix(defl(_applycols(Aadj, W)))))
+end
+
 """
     far_block_sigma_min(Amul, Aadj, n, W, z; prec=Float64, kmax=0, nullshift=10.0, reorth=true)
         -> (σ22, info)
@@ -289,9 +310,9 @@ rank-1). `info` has `σ11, σ22, γ, R2, θmin, R1, k, nreorth`.
 function krylov_resolvent_floor(Amul, Aadj, n::Int, W0, z::Number; kwargs...)
     W = _frame(W0)
     H = _captured_block(Amul, W)
-    γ = _coupling(Amul, Aadj, W)
+    γ = _coupling_cert(Amul, Aadj, W)
     σ22, info = far_block_sigma_min(Amul, Aadj, n, W, z; kwargs...)
-    σ11 = minimum(svdvals(H - z * I))                       # small certified SVD (m×m)
+    σ11 = _sigma_min_cert(H - z * I)                        # VERIFIED small SVD (svdbox)
     floor = info.R2 >= 1 ? 0.0 : _assemble(σ11, σ22, γ)
     return floor, (; σ11, σ22, γ, info.R2, info.θmin, info.R1, info.k, info.nreorth)
 end
@@ -346,7 +367,7 @@ function certify_gap_on_circle(Amul, Aadj, n::Int, W0,
         nθ::Int = 64, kmax::Int = 0, nullshift::Real = 10.0, reorth::Bool = true)
     W = _frame(W0)
     H = _captured_block(Amul, W)
-    γ = _coupling(Amul, Aadj, W)
+    γ = _coupling_cert(Amul, Aadj, W)
 
     # ONE expensive far-block Krylov, at the centre; 1-Lipschitz over the disk.
     σ22c, info = far_block_sigma_min(Amul, Aadj, n, W, center;
@@ -354,8 +375,8 @@ function certify_gap_on_circle(Amul, Aadj, n::Int, W0,
     r = (auto_radius && info.R2 < 1) ? min(radius, 0.5 * σ22c) : radius
     σ22lo = info.R2 < 1 ? σ22c - r : -Inf
 
-    # cheap captured-block σ11 over the circle: small SVDs + 1-Lipschitz arc-cover
-    σ11s = [minimum(svdvals(H - (center + r * cis(2π * t / nθ)) * I)) for t in 0:(nθ - 1)]
+    # captured-block σ11 over the circle: VERIFIED small SVDs (svdbox) + 1-Lipschitz arc-cover
+    σ11s = [_sigma_min_cert(H - (center + r * cis(2π * t / nθ)) * I) for t in 0:(nθ - 1)]
     σ11lo = minimum(σ11s) - 2 * r * sin(π / (2nθ))
 
     floor = _assemble(σ11lo, σ22lo, γ)
@@ -460,86 +481,58 @@ function certify_leading_eigs(A::AbstractMatrix; kwargs...)
 end
 
 # ----------------------------------------------------------------------------------------
-# Spectral-gap certificate via the far block's DOMINANT SINGULAR SUBSPACE (Nisoli, Gauss
-# paper arXiv:2602.19435; the recursion applied to G₂₂*G₂₂).
+# Spectral-gap certificate (Nisoli, Gauss paper arXiv:2602.19435): σ_min(A−zI) certified on a
+# circle ENCLOSING the fast spectrum, by SAMPLING the circle and running the rigorous matvec
+# far-block certificate at each sample. Unlike the per-eigenvalue isolation circles — certified
+# once at the centre + Lipschitz — the bulk circle around 0 cannot use a centre evaluation
+# (σ_min(0−G₂₂)=σ_min(G₂₂)≈0 for the near-singular far block), so EACH point on the circle is
+# certified separately and stitched by the 1-Lipschitz arc-cover. Sampling is the expensive part.
 # ----------------------------------------------------------------------------------------
 """
-    certify_gap(Amul, Aadj, n, Wslow, radius; kgram=40, nθ=64, tol=1e-8) -> (floor, info)
+    certify_gap(Amul, Aadj, n, Wslow, radius; center=0, nθ=64, prec=Float64, kmax=0,
+                nullshift=10.0, reorth=true) -> (floor, info)
 
-Certify the SPECTRAL GAP: `σ_min(A − zI) > 0` on the circle `|z| = radius` enclosing the fast
-spectrum, given the certified leading frame `Wslow` (`n×k`, e.g. `V·mr.W[:,1:k]` from
-`certify_leading_eigs`). The far block `G₂₂ = P_W A P_W` (`P_W = I − Wslow Wslow*`) is handled
-by its dominant SINGULAR subspace rather than a direct `σ_min` Lanczos:
+Certify the SPECTRAL GAP: `σ_min(A − zI) > 0` on the circle `Γ = {center + radius·e^{iθ}}`
+enclosing the fast spectrum `λ_{k+1},…`, given the certified leading frame `Wslow` (`n×k`,
+e.g. `V·mr.W[:,1:k]` from `certify_leading_eigs`). RIGOROUS, matvec-only — the same algorithm
+as the isolation circles, but sampled around Γ rather than Lipschitz-covered from a centre:
 
-  * Arnoldi-compress the HERMITIAN Gram `G₂₂*G₂₂` (matvec `x ↦ G₂₂*(G₂₂ x)`) and CERTIFY its
-    leading eigenvalues with `miyajima_rump` (refined frame, the same Rump–Miyajima scheme) on
-    that upper-left corner → the `k'` dominant singular values² `Σ²` (certified discs) and refined
-    right vectors `V_g`; `U_g = G₂₂ V_g/Σ`. The residual `‖E‖ = σ_{k'+1}` (largest uncaptured disc
-    upper end + the Gram Arnoldi residual) is ≈0 for low-rank far blocks.
-  * `(U_g Σ V_g* − zI)` is block-diagonal w.r.t. `span[U_g,V_g]` and its complement (where it is
-    `−zI`), so `σ_min(U_gΣV_g* − zI) = min(σ_min(B − zI), |z|)`, `B = Q*(U_gΣV_g*)Q` a small
-    `≤2k'` SVD. Hence `σ_min(G₂₂ − zI) ≥ min(σ_min(B−zI), |z|) − ‖E‖`.
+  * at each of `nθ` samples `z_j` on Γ, the far block `σ_min(G₂₂ − z_jI)` (`G₂₂ = P_W A P_W`)
+    is certified by `far_block_sigma_min` — the matvec Lanczos on `M_{z_j}=(G₂₂−z_jI)*(G₂₂−z_jI)`
+    with Paige `‖R₂‖`, selective reorthogonalization, and the deviation-lemma floor;
+  * the captured block `σ_slow = σ_min(Wslow*A Wslow − z_jI)` is a VERIFIED small SVD (`svdbox`);
+  * assembled with the certified coupling `γ`: `σ_min(A−z_jI) ≥ σ_slow σ_far/(σ_slow+σ_far+γ)`;
+  * `σ_min(A−zI)` is 1-Lipschitz in `z`, so the whole circle is covered by
+    `min_j floor(z_j) − 2·radius·sin(π/2nθ)`.
 
-Then `σ_min(A − zI) ≥ assemble(σ_slow, σ_far, γ)` on the circle (`σ_slow = σ_min(Wslow*A Wslow −
-zI)`, `γ` the coupling), Lipschitz arc-covered. This SIDESTEPS the non-normal `σ_min` collapse:
-all the structure lives in the few large singular directions (a small dense SVD), the rest is
-`≈|z|`. (For a rigorous tail, `‖E‖` needs a certified upper bound on `σ_{k'+1}`; here it is the
-Ritz estimate — Float64, the candidate.)
+The bulk circle needs per-sample evaluation (no centre shortcut — `σ_min(0−G₂₂)≈0` for the
+near-singular far block); this is the expensive part (`nθ` far-block Lanczos). `prec=BigFloat`
+for strongly non-normal far blocks. For dense `A` the small SVDs / coupling are certified via
+`BallArithmetic`; for a pure matvec operator the matvecs are the Float64 candidate (a ball
+matvec is the remaining rigorous upgrade).
 """
 function certify_gap(Amul, Aadj, n::Int, Wslow::AbstractMatrix, radius::Real;
-        kgram::Int = 40, nθ::Int = 64, tol::Real = 1e-8, refine::Integer = 6)
+        center::Number = 0, nθ::Int = 64, prec::Type = Float64,
+        kmax::Int = 0, nullshift::Real = 10.0, reorth::Bool = true)
     W = _frame(Wslow)
-    Pw(x) = x .- W * (W' * x)
-    G22mul(x) = Pw(Amul(Pw(x)))
-    G22adj(x) = Pw(Aadj(Pw(x)))
-    Gram(x) = G22adj(G22mul(x))                          # Hermitian PSD, eigenvalues = σ(G₂₂)²
-
-    # CERTIFY the dominant singular values² on the UPPER-LEFT CORNER of G₂₂*G₂₂ with the same
-    # Rump–Miyajima scheme: miyajima_rump certifies the eigenvalues σ², and (the Gram being
-    # Hermitian) the ORTHONORMAL eigenvectors are the right singular vectors. The certified
-    # discs give the σ² with rigorous bounds; the orthonormal vectors give the geometry.
-    Hg, Vb, _ = _arnoldi(Gram, n, min(kgram, n - size(W, 2) - 1))
-    mrg = miyajima_rump(ComplexF64.(Hg); refine = refine, kappa_mode = :svdbox)
-    Eg = eigen(Hermitian((Hg + Hg') / 2))               # orthonormal eigenvectors of the corner
-    pe = sortperm(real.(Eg.values); rev = true)
-    σ2 = sort(real.(mrg.centres); rev = true)           # CERTIFIED Gram eigenvalues = σ(G₂₂)²
-    keep = findall(>(tol * σ2[1]), σ2)                  # dominant singular values²
-    Vg = Vb * Eg.vectors[:, pe[keep]]                   # orthonormal right singular vectors
-    # residual ‖E‖ = σ_{k'+1}(G₂₂) = ‖G₂₂(I−V_gV_g*)‖ = √λ_max(P_⊥ G₂₂*G₂₂ P_⊥) — the largest
-    # singular value OUTSIDE the captured subspace, by power iteration on the deflated Gram.
-    Pperp(x) = x .- Vg * (Vg' * x)
-    ve = Pperp(randn(ComplexF64, n))
-    ve ./= norm(ve)
-    λe = 0.0
-    for _ in 1:30
-        we = Pperp(Gram(Pperp(ve)))
-        λe = real(dot(ve, we))
-        nw = norm(we)
-        nw <= 0 && break
-        ve = we ./ nw
-    end
-    Enorm = sqrt(max(0.0, λe))
-    Σg = sqrt.(max.(σ2[keep], 0.0))
-    Ug = reduce(hcat, [G22mul(Vector{ComplexF64}(Vg[:, j])) ./ max(Σg[j], eps())
-                       for j in eachindex(Σg)])          # left singular vectors
-    Q = Matrix(qr(hcat(Ug, Vg)).Q)
-    B = Q' * (Ug * Diagonal(complex.(Σg)) * Vg') * Q     # ≤2k'×2k' block of U Σ V*
-
-    Hs = W' * _applycols(Amul, W)                        # slow block
-    γ = _coupling(Amul, Aadj, W)
-
+    H = _captured_block(Amul, W)                         # slow block W*AW
+    γ = _coupling_cert(Amul, Aadj, W)                    # certified upper bound on the coupling
     floors = Float64[]
+    R2max = 0.0
+    σ22min = Inf
     for t in 0:(nθ - 1)
-        z = radius * cis(2π * t / nθ)
-        σlr = min(minimum(svdvals(B - z * I)), abs(z))   # σ_min(U_gΣV_g* − zI)
-        σfar = max(0.0, σlr - Enorm)                     # σ_min(G₂₂ − zI)
-        σslow = minimum(svdvals(Hs - z * I))
-        push!(floors, _assemble(σslow, σfar, γ))
+        z = center + radius * cis(2π * t / nθ)
+        σ22, info = far_block_sigma_min(Amul, Aadj, n, W, z;
+            prec = prec, kmax = kmax, nullshift = nullshift, reorth = reorth)
+        R2max = max(R2max, info.R2)
+        σ22min = min(σ22min, σ22)
+        σ11 = _sigma_min_cert(H - z * I)                 # VERIFIED small SVD (svdbox)
+        push!(floors, info.R2 < 1 ? _assemble(σ11, σ22, γ) : 0.0)
     end
     fl = minimum(floors) - 2 * radius * sin(π / (2nθ))
     return fl,
-    (; floor = fl, radius = Float64(radius), Enorm = Enorm, ksing = length(keep),
-        γ = γ, gram_kappa = mrg.kappa, gram_R2 = mrg.nrmR2, certified = fl > 0)
+    (; floor = fl, radius = Float64(radius), center = ComplexF64(center), γ = γ,
+        R2 = R2max, σ22min = σ22min, nθ = nθ, certified = (fl > 0 && R2max < 1))
 end
 
 function certify_gap(A::AbstractMatrix, Wslow::AbstractMatrix, radius::Real; kwargs...)
