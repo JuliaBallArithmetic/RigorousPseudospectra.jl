@@ -531,6 +531,23 @@ On well-separated spectra ($\beta_\Lambda$ and all $r_j$ far below the gaps) the
 rounding, as on the gallery of Table~\ref{tab:gallery}; the gain is reserved for the
 coupling-bound regime.
 
+\paragraph{Block-diagonal estimate vs.\ the exact block SVD.} Both Lemma~\ref{lem:blockres}
+and Proposition~\ref{prop:blockdom} read $\sigma_{\min}$ off the \emph{diagonal} blocks $P_j$
+and divide by the transport $\kappa_2(W)$ of \eqref{eq:transport}: they certify
+$\sigma_{\min}(B-zI)$ through the block-diagonal surrogate, at the cost of one small
+$\sigma_{\min}(P_j-zI)$ per block. When $B$ is small enough to factor a verified SVD directly,
+$\sigma_{\min}(B-zI)$ is instead certified \emph{exactly} by a single $\texttt{svdbox}(B-zI)$
+per $z$, with \emph{no} $\kappa_2$ factor --- the SVD sees the true non-normality of the whole
+block rather than the block-diagonal proxy plus its inter-block conditioning. For a captured
+Krylov block of moderate size $m=\dim B$ (hundreds) this costs $O(m^3)$ per sample
+(milliseconds) and recovers exactly the $\kappa_2$ that the block-diagonal floor concedes. On
+the GKW operator with an $m=32$ Krylov block, $\kappa_2(W)\approx4.3$, and replacing the
+block-diagonal estimate by the exact $\texttt{svdbox}$ lifts the certified $\sigma_{\min}$ on
+the inter-eigenvalue circle from $0.024$ to the true $0.075$ --- turning a marginal gap circle
+into a comfortable one. The per-block layer is therefore reserved for blocks too large for one
+SVD, where its $O(\sum_j m_j^3)\ll O(m^3)$ cost is worth the $\kappa_2$ price; for the moderate
+blocks of the Krylov gap certificate the exact SVD is both cheap and tight, and is the default.
+
 \paragraph{The cheap all-singletons layer.} For a separable spectrum the blocks are
 singletons, $\sigma_{\min}(P_j-zI)=\abs{z-\widetilde M_{jj}}$, and the block floor is a
 scalar gap that the \emph{recentred Ger\v sgorin gaps} of $\widetilde M=YBW$ sharpen in both

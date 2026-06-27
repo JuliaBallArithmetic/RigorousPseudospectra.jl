@@ -495,38 +495,44 @@ end
 # ----------------------------------------------------------------------------------------
 """
     certify_gap(Amul, Aadj, n; nsep=5, nblock=256, radius=nothing, center=0, refine=6,
-                nθ=64, prec=Float64, kmax=0, nullshift=10.0, reorth=true) -> (floor, info)
+                block_estimate=false, nθ=64, prec=Float64, ...) -> (floor, info)
 
 Certify the SPECTRAL GAP separating the leading `nsep` eigenvalues of `A` (matvecs `Amul`,
 `Aadj`) from the rest of `σ(A)`, on a circle `Γ = {center + radius·e^{iθ}}` that leaves
 `λ₁,…,λ_{nsep}` OUTSIDE and encloses `λ_{nsep+1},…`. RIGOROUS, matvec-only:
 
   1. Arnoldi compresses `A` to a LARGE block `H = H_{nblock}` (`nblock ≫ nsep`); `miyajima_rump`
-     BLOCK-DIAGONALIZES + certifies it (`Ã = W⁻¹HW`, clusters, `κ₂`), and `vbd_resolvent` builds
-     the block-σ_min floor (`z`-independent, built once).
+     (frame=:schur) BLOCK-DIAGONALIZES + certifies it (`Ã = W⁻¹HW`, clusters, `κ₂`).
   2. `radius` defaults to `√(|λ_{nsep}|·|λ_{nsep+1}|)` from the certified spectrum (a circle in the
      gap below the leading `nsep`); pass `radius` to choose it yourself.
   3. On each of `nθ` samples `z_j` on Γ:
-       `σ₁₁ = sigma_min_lower(vr, z_j; near=true)` — the BLOCK-DIAGONAL resolvent estimate: one
-              SMALL SVD per diagonal block, `κ₂`-transported, with the off-block coupling;
-       `σ₂₂ = far_block_sigma_min(A, V, z_j)` — the residual far block (deflate the whole Krylov
-              basis `V`), spectrum DEEP inside Γ, so large and few Lanczos steps;
+       `σ₁₁ = σ_min(H − z_jI)` — by default the EXACT `svdbox(H−z_jI)` (κ₂-free, `O(nblock³)` ≈
+              ms/sample for moderate `nblock`). `block_estimate=true` uses the per-block estimate
+              `sigma_min_lower` (a small SVD per diagonal block) — cheaper for a HUGE block but it
+              pays a `κ₂(W)` transport factor (looser; only worth it when the full svdbox is too big);
+       `σ₂₂ = σ_min(z_j − G₂₂)` — the residual far block (deflate the whole Krylov basis `V`):
+              `≥ |z_j| − ‖G₂₂‖` (deep/low-rank block ⇒ `‖G₂₂‖≈0`), else `far_block_sigma_min`;
        assembled with the certified coupling `γ`. Closed by the 1-Lipschitz arc-cover.
 
-`info` carries `radius, nsep, nblock, γ, R2, σ22min, βN, mr, spectrum` (sorted `|λ|`). `prec=
-BigFloat` for the far block when the residual is strongly non-normal.
+`info` carries `radius, nsep, nblock, γ, R2, σ22min, G22norm, βN, mr, spectrum` (sorted `|λ|`)
+and `block_estimate`. `prec=BigFloat` for the far block when the residual is strongly non-normal.
 """
 function certify_gap(Amul, Aadj, n::Int; nsep::Int = 5, nblock::Int = 256,
         radius::Union{Nothing, Real} = nothing, center::Number = 0, refine::Integer = 6,
-        nθ::Int = 64, prec::Type = Float64, kmax::Int = 0, nullshift::Real = 10.0,
-        reorth::Bool = true)
+        block_estimate::Bool = false, nθ::Int = 64, prec::Type = Float64,
+        kmax::Int = 0, nullshift::Real = 10.0, reorth::Bool = true)
     H, V, βN = _arnoldi(Amul, n, min(nblock, n - 2))
+    Hc = ComplexF64.(H)
     # frame=:schur ⇒ a BLOCK-ORTHONORMAL frame (orthonormal within each block): κ(W) is then
     # governed by benign inter-block subspace angles, NOT the malignant intra-block non-normality
-    # — so the block-diagonal σ_min floor's transport constant is far tighter than the uniform
-    # κ₂(W) of the eigenvector frame (draft.tex §"block-orthonormal Schur frame").
-    mr = miyajima_rump(ComplexF64.(H); refine = refine, kappa_mode = :svdbox, frame = :schur)
-    vr = vbd_resolvent(ComplexF64.(H), mr)               # block-σ_min floor, built once
+    # (draft.tex §"block-orthonormal Schur frame"). mr also gives the CERTIFIED block spectrum.
+    mr = miyajima_rump(Hc; refine = refine, kappa_mode = :svdbox, frame = :schur)
+    # σ₁₁ = σ_min(H − zI) of the captured block. By default the EXACT `svdbox(H−zI)` — for a
+    # moderate block (`nblock` ≲ hundreds) it is O(nblock³) ≈ ms/sample and κ₂-FREE. The
+    # `block_estimate` path (`vbd_resolvent`/`sigma_min_lower`: a small SVD per diagonal block)
+    # is cheaper for a HUGE block but pays a `κ₂(W)` transport factor — use it only when the
+    # full svdbox is too big.
+    vr = block_estimate ? vbd_resolvent(Hc, mr) : nothing
     λ = mr.centres
     ord = sortperm(abs.(λ); rev = true)
     r = radius === nothing ?
@@ -550,7 +556,8 @@ function certify_gap(Amul, Aadj, n::Int; nsep::Int = 5, nblock::Int = 256,
     σ22min = Inf
     for t in 0:(nθ - 1)
         z = center + r * cis(2π * t / nθ)
-        σ11 = sigma_min_lower(vr, z; near = true)        # BLOCK-DIAGONAL estimate (small SVDs)
+        σ11 = block_estimate ? sigma_min_lower(vr, z; near = true) :  # per-block, κ₂-transported
+              _sigma_min_cert(Hc - z * I)                            # exact full svdbox (default)
         # deep far block ⇒ σ_min(z−G₂₂) ≥ |z| − ‖G₂₂‖ (z-independent, no Lanczos); only if the far
         # block reaches the circle (‖G₂₂‖ ≥ |z|) fall back to the per-z far-block σ_min certificate.
         local σ22
@@ -569,7 +576,8 @@ function certify_gap(Amul, Aadj, n::Int; nsep::Int = 5, nblock::Int = 256,
     (; floor = fl, radius = r, center = ComplexF64(center),
         nsep = nsep, nblock = size(V, 2),
         γ = γ, R2 = R2max, σ22min = σ22min, G22norm = G22n, βN = βN, mr = mr,
-        spectrum = abs.(λ[ord]), certified = (fl > 0 && R2max < 1))
+        block_estimate = block_estimate, spectrum = abs.(λ[ord]),
+        certified = (fl > 0 && R2max < 1))
 end
 
 function certify_gap(A::AbstractMatrix; kwargs...)
