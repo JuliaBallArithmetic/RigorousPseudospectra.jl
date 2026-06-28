@@ -424,6 +424,19 @@ function _arnoldi(Amul, n::Int, N::Int; v0 = randn(ComplexF64, n))
     return H[1:N, 1:N], V[:, 1:N], abs(H[N + 1, N])
 end
 
+# Verified block diagonalization of the Krylov compression via BallArithmetic's VBD
+# (`schur_newton_vbd`: block-orthonormal Schur+Newton frame + Miyajima certification + disc
+# clustering + per-block coupling — κ(W) governed by benign inter-block angles). The VBD lives
+# in BallArithmetic; here we only adapt its result to the (centres, clusters, frame W, discs,
+# κ₂, raw `res`) the Krylov certificate reads. `res` feeds `vbd_resolvent` for the block floor.
+function _certify_block(Hc::AbstractMatrix, maxsteps::Integer)
+    res = BallArithmetic.schur_newton_vbd(BallMatrix(Matrix(Hc));
+        maxsteps = maxsteps, kappa_mode = :svdbox)
+    return (centres = res.eigenvalues, clusters = [collect(c) for c in res.clusters],
+        W = mid(res.basis), radii = [rad(d) for d in res.cluster_intervals],
+        kappa = res.kappa, res = res)
+end
+
 """
     certify_leading_eigs(Amul, Aadj, n; nblock=16, neig=5, refine=6, prec=Float64,
                          frac=0.4, nθ=24) -> (mr, results)
@@ -458,7 +471,7 @@ function certify_leading_eigs(Amul, Aadj, n::Int; nblock::Int = 16, neig::Int = 
         refine::Integer = 6, prec::Type = Float64, frac::Real = 0.4, nθ::Int = 24)
     H, V, βN = _arnoldi(Amul, n, nblock)
     Hc = ComplexF64.(H)
-    mr = miyajima_rump(Hc, first(vbd_solve(Hc; maxsteps = refine)); kappa_mode = :svdbox)
+    mr = _certify_block(Hc, refine)                      # BallArithmetic VBD (block-orthonormal)
     λ = mr.centres
     ord = sortperm(abs.(λ); rev = true)
     done = Set{Int}()
@@ -466,7 +479,7 @@ function certify_leading_eigs(Amul, Aadj, n::Int; nblock::Int = 16, neig::Int = 
     results = NamedTuple[]
     for i in ord[1:min(neig, length(ord))]
         i in done && continue
-        cl = mr.clusters[findfirst(c -> i in c.idx, mr.clusters)].idx
+        cl = mr.clusters[findfirst(c -> i in c, mr.clusters)]
         union!(done, cl)
         append!(leadcols, cl)
         c = λ[i]
@@ -524,16 +537,15 @@ function certify_gap(Amul, Aadj, n::Int; nsep::Int = 5, nblock::Int = 256,
         kmax::Int = 0, nullshift::Real = 10.0, reorth::Bool = true)
     H, V, βN = _arnoldi(Amul, n, min(nblock, n - 2))
     Hc = ComplexF64.(H)
-    # frame=:schur ⇒ a BLOCK-ORTHONORMAL frame (orthonormal within each block): κ(W) is then
-    # governed by benign inter-block subspace angles, NOT the malignant intra-block non-normality
-    # (draft.tex §"block-orthonormal Schur frame"). mr also gives the CERTIFIED block spectrum.
-    mr = miyajima_rump(Hc, first(vbd_solve(Hc; maxsteps = refine)); kappa_mode = :svdbox)
+    # BallArithmetic VBD: block-orthonormal Schur+Newton frame ⇒ κ(W) governed by benign
+    # inter-block angles, NOT the intra-block non-normality, plus the certified block spectrum.
+    mr = _certify_block(Hc, refine)
     # σ₁₁ = σ_min(H − zI) of the captured block. By default the EXACT `svdbox(H−zI)` — for a
     # moderate block (`nblock` ≲ hundreds) it is O(nblock³) ≈ ms/sample and κ₂-FREE. The
     # `block_estimate` path (`vbd_resolvent`/`sigma_min_lower`: a small SVD per diagonal block)
     # is cheaper for a HUGE block but pays a `κ₂(W)` transport factor — use it only when the
     # full svdbox is too big.
-    vr = block_estimate ? vbd_resolvent(Hc, mr) : nothing
+    vr = block_estimate ? vbd_resolvent(mr.res) : nothing
     λ = mr.centres
     ord = sortperm(abs.(λ); rev = true)
     r = radius === nothing ?

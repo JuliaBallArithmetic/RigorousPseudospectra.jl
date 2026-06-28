@@ -59,6 +59,7 @@ function vbd_solve(B::AbstractMatrix; sep::Real = -1, maxsteps::Integer = 6)
     rt(x) = parent[x] == x ? x : (parent[x] = rt(parent[x]))
     uni(a, b) = (ra = rt(a); rb = rt(b); ra == rb ? false : (parent[ra] = rb; true))
     @inbounds for j in 1:n, i in 1:(j - 1)
+
         abs(d[i] - d[j]) < τ && uni(i, j)
     end
     W = copy(Q)
@@ -67,6 +68,7 @@ function vbd_solve(B::AbstractMatrix; sep::Real = -1, maxsteps::Integer = 6)
         cof = Int[rt(i) for i in 1:n]
         X = zeros(CT, n, n)
         @inbounds for j in 1:n, i in 1:n
+
             cof[i] != cof[j] && (X[i, j] = -A[i, j] / (d[i] - d[j]))
         end
         return X
@@ -114,8 +116,9 @@ end
 # deserialized / computed at a lower precision keeps its old limb count — and mixing limb
 # counts segfaults MPFR inside `inv`/`lu`. Reconstructing through the real components forces
 # the current precision (and casts a Float64 warm-start frame to BigFloat).
-_to_prec(::Type{Complex{T}}, M) where {T <: AbstractFloat} =
+function _to_prec(::Type{Complex{T}}, M) where {T <: AbstractFloat}
     Complex{T}[Complex{T}(T(real(x)), T(imag(x))) for x in M]
+end
 
 # union–find helpers (shared by the warm-start refinement)
 _uf_find(p, x) = p[x] == x ? x : (p[x] = _uf_find(p, p[x]))
@@ -135,6 +138,7 @@ end
 function _newton_decouple(A, d, parent, n, CT)
     X = zeros(CT, n, n)
     @inbounds for j in 1:n, i in 1:n
+
         (i != j && _uf_find(parent, i) != _uf_find(parent, j)) &&
             (X[i, j] = -A[i, j] / (d[i] - d[j]))
     end
@@ -202,6 +206,7 @@ function vbd_refine(B::AbstractMatrix, W0::AbstractMatrix; outer::Integer = 4,
         # re-cluster from scratch at the refined spectrum: distance, then column-norm merge
         parent = collect(1:n)
         @inbounds for j in 1:n, i in 1:(j - 1)
+
             abs(d[i] - d[j]) < τ && _uf_union!(parent, i, j)
         end
         for _ in 1:n
@@ -322,12 +327,14 @@ function vbd_resolvent(B::AbstractMatrix, R::MiyajimaRump{T};
         push!(Prad, pr)
         push!(blocknn, opn(BallMatrix(pm - cj * I, pr)))      # ‖Nⱼ‖₂ = ‖P_j − cⱼI‖₂
         for j in idx, i in idx
+
             inblock[i, j] = true
         end
     end
     Em = copy(Am)
     Erad = copy(Ar)
     @inbounds for j in 1:n, i in 1:n
+
         if inblock[i, j]
             Em[i, j] = zero(CT)
             Erad[i, j] = zero(T)
@@ -338,6 +345,29 @@ function vbd_resolvent(B::AbstractMatrix, R::MiyajimaRump{T};
     # the spectral norm of the block ROWS of the off-block matrix, plus the global slack.
     blockrad = T[opn(BallMatrix(Em[idx, :], Erad[idx, :])) + beta for idx in blocks]
     return VBDResolvent(centres, blocknn, Pmid, Prad, coupling, beta, blockrad, R.kappa)
+end
+
+"""
+    vbd_resolvent(res::SchurNewtonVBDResult) -> VBDResolvent
+
+Build the block-σ_min resolvent floor directly from a BallArithmetic verified block
+diagonalization (`schur_newton_vbd`). The VBD itself — the block-orthonormal Schur+Newton
+frame, the Miyajima certification, and the per-block coupling/centre/non-normality data —
+lives in BallArithmetic; RigorousPseudospectra only repackages it for the resolvent bound
+(no recomputation). Every field maps straight across: `block_centers`→centres,
+`block_nonnormality`→‖Nⱼ‖₂, `block_coupling`→rⱼ, `remainder_norm`→‖N‖₂, `beta`, `kappa`; the
+per-block `Pⱼ` is the diagonal block of `block_diagonal`.
+"""
+function vbd_resolvent(res::SchurNewtonVBDResult)
+    bd = res.block_diagonal
+    Am = mid(bd)
+    Ar = rad(bd)
+    CT = eltype(Am)
+    Tr = real(CT)
+    Pmid = [Matrix{CT}(Am[c, c]) for c in res.clusters]
+    Prad = [Matrix{Tr}(Ar[c, c]) for c in res.clusters]
+    return VBDResolvent(collect(res.block_centers), collect(res.block_nonnormality),
+        Pmid, Prad, res.remainder_norm, res.beta, collect(res.block_coupling), res.kappa)
 end
 
 """
