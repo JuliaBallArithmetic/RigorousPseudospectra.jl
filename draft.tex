@@ -289,6 +289,30 @@ step that must be performed in outward-rounded interval/ball arithmetic; in prac
 products $YW$, $YAW$ and $Y(AW-W\Lambda)$ are formed as ball matrices so that every
 floating-point rounding error is rigorously absorbed.
 
+\begin{remark}[Re-merged blocks are re-orthonormalized]\label{rem:remerge}
+Step~4 orthonormalizes within the \emph{working} (Newton) clusters of Step~2, but the
+certified clustering of Corollary~\ref{cor:clusters} can be strictly \emph{coarser}: when
+two working blocks' enclosure regions $\Omega_i,\Omega_j$ of
+Theorem~\ref{thm:enclosure} overlap, their eigenvalues lie within the certification slack of
+one another and \emph{cannot} be separated at the working precision, so the certificate groups
+them. When that coarser grouping is adopted as the block \emph{structure} --- not merely for
+the eigenvalue count --- the merged block's columns are the concatenation of two separately
+orthonormalized sub-bases: orthonormal \emph{within} each part but not \emph{across}. One thin
+QR of $W_{:,\,\mathcal C_i\cup\mathcal C_j}$ repairs this. It is legitimate because the sum of
+the two (approximately) invariant subspaces is itself invariant, so the $Q$-factor is a genuine
+block-orthonormal basis for the merged eigenspace; the candidate is then \emph{re-certified}
+($R_2,R_1$ recomputed on the new $W$), the QR being candidate processing and the residuals the
+certificate (Remark~\ref{rem:Dfree}). The merged block is thereafter one jointly enclosed
+cluster: its internal spread $\norm{P-cI}_2$ about the block barycentre $c$ stays \emph{inside}
+the block --- carried by its recentred $\sigma_{\min}(P-zI)$, exactly the defective/near-defective
+regime of Section~\ref{sec:geom} --- while only the small inter-block slack remains as coupling.
+This is the same coalescing the column-norm rule of Step~2 performs \emph{during} refinement,
+now enforced \emph{after} the disc-overlap arbiter has the final say. (Equivalently one may keep
+the finer Newton blocks as the structure and use Corollary~\ref{cor:clusters} only to report the
+joint count; adopting the coarser blocks, with this re-orthonormalization, is what the reference
+implementation does so that every returned block is genuinely block-orthonormal.)
+\end{remark}
+
 \section{Rigorous enclosure: the Miyajima argument}\label{sec:rigor}
 
 Throughout, $\norm{\cdot}_\infty$ is the matrix $\infty$-norm (maximal absolute row
