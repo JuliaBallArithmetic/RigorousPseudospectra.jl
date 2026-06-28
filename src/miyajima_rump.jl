@@ -78,6 +78,7 @@ function _offdiag_norm(M)
     s = zero(real(float(eltype(M))))
     n = size(M, 1)
     @inbounds for j in 1:n, i in 1:n
+
         i != j && (s += abs2(M[i, j]))
     end
     return sqrt(s)
@@ -91,10 +92,18 @@ _offres(Bc, Wc) = _offdiag_norm(Wc \ (Bc * Wc))
 function _components(adj::AbstractMatrix{Bool})
     n = size(adj, 1)
     parent = collect(1:n)
-    find(x) = (r = x; while parent[r] != r; r = parent[r]; end;
-    while parent[x] != r; (parent[x], x) = (r, parent[x]); end; r)
+    find(x) = (r = x; while parent[r] != r
+            ;
+            r = parent[r];
+        end;
+        while parent[x] != r
+            ;
+            (parent[x], x) = (r, parent[x]);
+        end; r)
     @inbounds for j in 1:n, i in 1:(j - 1)
-        (adj[i, j] || adj[j, i]) && (ri = find(i); rj = find(j); ri != rj && (parent[ri] = rj))
+
+        (adj[i, j] || adj[j, i]) &&
+            (ri = find(i); rj = find(j); ri != rj && (parent[ri] = rj))
     end
     groups = Dict{Int, Vector{Int}}()
     for i in 1:n
@@ -109,6 +118,7 @@ end
 function _membership(clusters, n)
     cof = zeros(Int, n)
     for (k, c) in enumerate(clusters), i in c.idx
+
         cof[i] = k
     end
     return cof
@@ -180,6 +190,7 @@ function _certify(Bc::Matrix{Complex{T}}, W::Matrix{Complex{T}};
 
     adj = falses(n, n)
     @inbounds for j in 1:n, i in 1:(j - 1)
+
         if abs(centres[i] - centres[j]) <= radii[i] + radii[j]
             adj[i, j] = adj[j, i] = true
         end
@@ -217,6 +228,7 @@ function _newton_from(A, d, Wc, cof)
     X = zeros(eltype(A), n, n)
     moved = false
     @inbounds for j in 1:n, i in 1:n
+
         if i != j && cof[i] != cof[j]
             X[i, j] = -A[i, j] / (d[i] - d[j])
             moved = true
@@ -266,6 +278,7 @@ function _newton_block_from(A, d, Wc, cof)
 
     X = zeros(eltype(A), n, n)
     @inbounds for a in eachindex(ids), b in eachindex(ids)
+
         a == b && continue
         Ik = blocks[ids[a]]
         Il = blocks[ids[b]]
@@ -300,6 +313,7 @@ function _dynamic_membership(A, d, θ)
     n = size(A, 1)
     adj = falses(n, n)
     @inbounds for j in 1:n, i in 1:(j - 1)
+
         gap = abs(d[i] - d[j])
         if abs(A[i, j]) >= θ * gap || abs(A[j, i]) >= θ * gap
             adj[i, j] = adj[j, i] = true
@@ -307,13 +321,31 @@ function _dynamic_membership(A, d, θ)
     end
     cof = zeros(Int, n)
     for (k, c) in enumerate(_components(adj)), i in c
+
         cof[i] = k
     end
     return cof
 end
 
+# Re-orthonormalize the frame WITHIN each working cluster: a QR of the cluster's columns keeps
+# its span (the invariant subspace, so the cross-cluster decoupling is untouched) but replaces
+# the basis by an orthonormal one, so κ(W) is governed by the benign INTER-block subspace angles
+# rather than the near-coincident geometry inside a cluster (the user's "reorthogonalize inside
+# the block"). TRADE-OFF: a cluster then stays an orthonormal Schur block — its off-diagonal
+# residue settles at the irreducible within-block coupling rather than being driven to ~0 by
+# (ill-conditioning) deep diagonalization. So this is OPT-IN (`block_reorth`): use it where κ(W)
+# must stay small (the block-σ_min estimate); leave it off where the deep diagonal is wanted.
+function _block_orthonormalize!(Wc, cof)
+    @inbounds for id in unique(cof)
+        idx = findall(==(id), cof)
+        Q = Matrix(qr(Wc[:, idx]).Q)
+        Wc[:, idx] = Q[:, 1:length(idx)]
+    end
+    return Wc
+end
+
 # the single-correction dynamic refinement loop (block selects entrywise vs Sylvester)
-function _refine_loop(Bc, Wc, θ, steps, block::Bool)
+function _refine_loop(Bc, Wc, θ, steps, block::Bool; block_reorth::Bool = false)
     step = block ? _newton_block_from : _newton_from
     for _ in 1:steps
         A = Wc \ (Bc * Wc)
@@ -321,6 +353,7 @@ function _refine_loop(Bc, Wc, θ, steps, block::Bool)
         cof = _dynamic_membership(A, d, θ)
         Wc, moved = step(A, d, Wc, cof)
         moved || break
+        block_reorth && _block_orthonormalize!(Wc, cof)   # keep blocks orthonormal ⇒ κ(W) capped
     end
     return Wc
 end
@@ -353,19 +386,20 @@ remains.
     successes, parameter-free (the `4/40` that stall for both need extended precision).
 """
 function refine_basis(B::AbstractMatrix, W::AbstractMatrix; steps::Integer = 1,
-        θ::Real = 0.9, mode::Symbol = :entrywise, tol::Real = 1e-8)
+        θ::Real = 0.9, mode::Symbol = :entrywise, tol::Real = 1e-8,
+        block_reorth::Bool = false)
     mode in (:entrywise, :block, :auto) ||
         error("mode must be :entrywise, :block, or :auto (got :$mode)")
     CT = _cfloat(B, W)
     Bc = CT.(Matrix(B))
     W0 = CT.(Matrix(W))
     if mode === :auto
-        We = _refine_loop(Bc, W0, θ, steps, false)        # cheap entrywise first
-        _offres(Bc, We) < tol && return We                # converged — done
-        Wb = _refine_loop(Bc, W0, θ, steps, true)         # stalled — retry block from W₀
+        We = _refine_loop(Bc, W0, θ, steps, false; block_reorth)   # cheap entrywise first
+        _offres(Bc, We) < tol && return We                         # converged — done
+        Wb = _refine_loop(Bc, W0, θ, steps, true; block_reorth)    # stalled — retry block from W₀
         return _offres(Bc, Wb) < _offres(Bc, We) ? Wb : We
     end
-    return _refine_loop(Bc, W0, θ, steps, mode === :block)
+    return _refine_loop(Bc, W0, θ, steps, mode === :block; block_reorth)
 end
 
 """
@@ -397,9 +431,17 @@ see [`refine_basis`](@ref)), then a SINGLE rigorous certification. `refine = 0` 
 plain `eigen` + certify. The final disc-overlap clustering is the rigorous arbiter (an
 over-optimistic split shows overlapping discs → re-merged; a divergent split
 ill-conditions `W` → Neumann fail, caught).
+
+`block_reorth = true` re-orthonormalizes the frame WITHIN each working cluster after every
+Newton step, so a near-coincident cluster (e.g. a deep geometric tail) stays an orthonormal
+block and `κ(W)` is capped by the benign inter-cluster angles instead of blowing up (Hénon
+256-block: κ 3342 → 19). The price is that such a cluster keeps its irreducible within-block
+off-diagonal rather than being driven to ~0 by (ill-conditioning) deep diagonalization — so it
+is OFF by default; turn it on where a small `κ(W)` matters (the block-σ_min estimate).
 """
 function miyajima_rump(B::AbstractMatrix; refine::Integer = 0, θ::Real = 0.9,
-        mode::Symbol = :entrywise, kappa_mode::Symbol = :cheap, frame::Symbol = :eigen)
+        mode::Symbol = :entrywise, kappa_mode::Symbol = :cheap, frame::Symbol = :eigen,
+        block_reorth::Bool = false)
     CT = _cfloat(B)
     Bc = CT.(Matrix(B))
     # candidate basis. `frame = :eigen` (default): the eigenvector basis — fully
@@ -416,6 +458,6 @@ function miyajima_rump(B::AbstractMatrix; refine::Integer = 0, θ::Real = 0.9,
     catch
         CT.(cand(ComplexF64.(Matrix(B))))
     end
-    refine > 0 && (W = refine_basis(Bc, W; steps = refine, θ, mode))
+    refine > 0 && (W = refine_basis(Bc, W; steps = refine, θ, mode, block_reorth))
     return _certify(Bc, W; kappa_mode)
 end
