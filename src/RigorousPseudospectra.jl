@@ -24,6 +24,6 @@ export miyajima_rump, refine_basis, MiyajimaRump, EigCluster
 export range_bisect, range_critical, ball_horner, PolyRange
 export free_resolvent, FreeResolvent, sigma_min_lower, resolvent_bound, row_col_gaps
 export schur_resolvent, SchurResolvent
-export vbd_solve, vbd_refine, vbd_resolvent, VBDResolvent, block_enclosure
+export vbd_solve, vbd_resolvent, VBDResolvent, block_enclosure
 
 end # module
