@@ -432,7 +432,7 @@ Certify the leading eigenvalues of `A` (matvecs `Amul`, `Aadj`) isolated, by the
 **Krylov–Rump–Miyajima decoupling**:
 
   1. Arnoldi compresses `A` to the `nblock × nblock` Rayleigh block `H` (and Krylov basis `V`).
-  2. `miyajima_rump(H; refine)` block-diagonalizes `H` — the §4e Sylvester–Newton refinement
+  2. `miyajima_rump(H, vbd_solve(H))` block-diagonalizes `H` — the VBD block-orthonormal frame
      produces the decoupled frame `mr.W` (`Ã = mr.W⁻¹ H mr.W` almost block-diagonal), certified
      eigenvalue discs, and the cluster partition.
   3. For each cluster, the lifted REFINED frame `Wᵢ = V·mr.W[:, cluster]` deflates the cluster
@@ -457,7 +457,8 @@ for strongly non-normal operators (the far block's pseudospectrum reaches across
 function certify_leading_eigs(Amul, Aadj, n::Int; nblock::Int = 16, neig::Int = 5,
         refine::Integer = 6, prec::Type = Float64, frac::Real = 0.4, nθ::Int = 24)
     H, V, βN = _arnoldi(Amul, n, nblock)
-    mr = miyajima_rump(ComplexF64.(H); refine = refine, kappa_mode = :svdbox)
+    Hc = ComplexF64.(H)
+    mr = miyajima_rump(Hc, first(vbd_solve(Hc; maxsteps = refine)); kappa_mode = :svdbox)
     λ = mr.centres
     ord = sortperm(abs.(λ); rev = true)
     done = Set{Int}()
@@ -526,7 +527,7 @@ function certify_gap(Amul, Aadj, n::Int; nsep::Int = 5, nblock::Int = 256,
     # frame=:schur ⇒ a BLOCK-ORTHONORMAL frame (orthonormal within each block): κ(W) is then
     # governed by benign inter-block subspace angles, NOT the malignant intra-block non-normality
     # (draft.tex §"block-orthonormal Schur frame"). mr also gives the CERTIFIED block spectrum.
-    mr = miyajima_rump(Hc; refine = refine, kappa_mode = :svdbox, frame = :schur)
+    mr = miyajima_rump(Hc, first(vbd_solve(Hc; maxsteps = refine)); kappa_mode = :svdbox)
     # σ₁₁ = σ_min(H − zI) of the captured block. By default the EXACT `svdbox(H−zI)` — for a
     # moderate block (`nblock` ≲ hundreds) it is O(nblock³) ≈ ms/sample and κ₂-FREE. The
     # `block_estimate` path (`vbd_resolvent`/`sigma_min_lower`: a small SVD per diagonal block)
