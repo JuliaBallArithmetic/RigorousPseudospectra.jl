@@ -471,7 +471,11 @@ function certify_leading_eigs(Amul, Aadj, n::Int; nblock::Int = 16, neig::Int = 
         refine::Integer = 6, prec::Type = Float64, frac::Real = 0.4, nθ::Int = 24)
     H, V, βN = _arnoldi(Amul, n, nblock)
     Hc = ComplexF64.(H)
-    mr = _certify_block(Hc, refine)                      # BallArithmetic VBD (block-orthonormal)
+    # BallArithmetic VBD (block-orthonormal Schur+Newton). With the warmup-then-merge fix in
+    # `schur_newton_vbd`, separated-but-coupled non-normal eigenvalues decouple before the merge
+    # check, so each distinct eigenvalue gets its own tiny-disc cluster (matches the eigen frame),
+    # while genuine near-defective chains still merge into one block.
+    mr = _certify_block(Hc, refine)
     λ = mr.centres
     ord = sortperm(abs.(λ); rev = true)
     done = Set{Int}()
@@ -483,8 +487,9 @@ function certify_leading_eigs(Amul, Aadj, n::Int; nblock::Int = 16, neig::Int = 
         union!(done, cl)
         append!(leadcols, cl)
         c = λ[i]
-        gap = minimum(abs(c - λ[j]) for j in eachindex(λ) if !(j in cl))
-        Wi = V * mr.W[:, cl]                             # lift the REFINED cluster frame
+        gap = minimum((abs(c - λ[j]) for j in eachindex(λ) if !(j in cl));
+            init = 2 * maximum(abs, λ))                  # to the nearest DISTINCT eigenvalue
+        Wi = V * mr.W[:, cl]                             # lift the eigenvector frame
         cert = certify_gap_on_circle(Amul, Aadj, n, Wi, c, frac * gap;
             prec = prec, auto_radius = true, nθ = nθ)
         push!(results, (; λ = c, disc = mr.radii[i], cluster = length(cl), cert))
