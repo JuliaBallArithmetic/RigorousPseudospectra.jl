@@ -398,7 +398,7 @@ function certify_gap_on_circle(
         x -> A * x, x -> A' * x, size(A, 1), W0, center, radius; kwargs...)
 end
 
-export far_block_sigma_min, certify_leading_eigs, certify_gap
+export far_block_sigma_min, certify_leading_eigs, certify_gap, certify_gap_locked
 
 # ----------------------------------------------------------------------------------------
 # Krylov–Rump–Miyajima decoupling: certify the leading eigenvalues of A isolated.
@@ -600,4 +600,83 @@ end
 
 function certify_gap(A::AbstractMatrix; kwargs...)
     certify_gap(x -> A * x, x -> A' * x, size(A, 1); kwargs...)
+end
+
+# ----------------------------------------------------------------------------------------
+# LOCKED gap certificate — the sound, tight variant (the singular-direction lock).
+#
+# The obstruction to a matvec gap floor on a circle Γ of radius r is that σ_min(z−A) is SMALL
+# on Γ (the circle threads between eigenvalues), and a random-seeded far_floor on the whole
+# operator is UNSOUND there: if the Krylov space misses the minimizing direction, θ_min sits
+# ABOVE the true σ_min (the {1,100} counterexample). The fix (user's construction):
+#
+#   σ_min(z−A) on Γ is attained along the RIGHT SINGULAR VECTOR of (z − H_kk), where H_kk is
+#   the NEAR-CIRCLE block (the certified eigenvalues within a band of |z|=r). We:
+#     • capture that band as an orthonormal frame  W = orth(V · mr.W[:,kk])  (its right singular
+#       vectors of (z−H_kk) attain the minimum — locking W removes exactly the small direction);
+#     • take σ₁₁ = σ_min(z − H_kk) from the EXACT verified svdbox of the SMALL block W*AW (well
+#       conditioned — unlike svdbox of the full nblock block, which can't certify σ>0);
+#     • take σ₂₂ = σ_min(z − G₂₂) on the COMPLEMENT (deflate W): now the complement has NO tiny
+#       eigenvalue (we removed it), so its σ_min is large & well-separated ⇒ far_floor captures
+#       it SOUNDLY from a random seed (no completeness gap — the deviation lemma applies to a
+#       well-separated bottom). γ = coupling. Assembled by (★), closed by the 1-Lipschitz arc.
+#
+# This is `krylov_resolvent_floor`'s block resolvent with the captured frame = the near-circle
+# band (NOT the leading eigenvalues). `band` (relative) sets the lock width: every eigenvalue
+# with ||λᵢ|−r| ≤ band·r is locked. Wider band ⇒ more directions locked (safer, larger σ₂₂)
+# at the cost of a bigger small-SVD. `info` carries σ11min/σ22min/γ/R2 and the lock size `m`.
+# ----------------------------------------------------------------------------------------
+"""
+    certify_gap_locked(Amul, Aadj, n; nsep=5, nblock=256, radius=nothing, center=0,
+                       refine=6, band=0.2, nθ=64, prec=Float64, kmax=0, reorth=true)
+        -> (floor, info)
+
+Certified `σ_min(A − zI) > 0` on the circle `Γ = {center + radius·e^{iθ}}` separating the
+leading `nsep` eigenvalues from the rest, by the **singular-direction lock**: capture the
+near-circle eigenvalue band `H_kk` (whose right singular vectors of `z−H_kk` attain the
+minimum), certify `σ₁₁ = σ_min(z−H_kk)` by the exact small `svdbox`, and certify the deflated
+complement `σ₂₂` by one streamed-`R₁/R₂` far-block Lanczos — SOUND because deflating the lock
+removes the only small singular value, leaving a well-separated bottom. Assembled by (★).
+`band` (relative to `radius`) is the lock width. See the block comment for the rigor argument.
+"""
+function certify_gap_locked(Amul, Aadj, n::Int; nsep::Int = 5, nblock::Int = 256,
+        radius::Union{Nothing, Real} = nothing, center::Number = 0, refine::Integer = 6,
+        band::Real = 0.2, nθ::Int = 64, prec::Type = Float64, kmax::Int = 0,
+        reorth::Bool = true)
+    H, V, βN = _arnoldi(Amul, n, min(nblock, n - 2))
+    Hc = ComplexF64.(H)
+    mr = _certify_block(Hc, refine)
+    λ = mr.centres
+    ord = sortperm(abs.(λ); rev = true)
+    r = radius === nothing ?
+        sqrt(abs(λ[ord[nsep]]) * abs(λ[ord[min(nsep + 1, length(ord))]])) : Float64(radius)
+    # near-circle band: every certified eigenvalue within `band` (relative) of the circle radius.
+    kk = [i for i in eachindex(λ) if abs(abs(λ[i]) - r) <= band * r]
+    isempty(kk) && (kk = [ord[min(nsep + 1, length(ord))]])   # at least the first inside eigenvalue
+    W = _frame(V * mr.W[:, kk])                                # lifted near-circle frame (the lock)
+    Hk = _captured_block(Amul, W)                              # H_kk = W*AW (small, well conditioned)
+    γ = _coupling_cert(Amul, Aadj, W)
+    floors = Float64[]
+    R2max = 0.0
+    σ11min = Inf
+    σ22min = Inf
+    for t in 0:(nθ - 1)
+        z = center + r * cis(2π * t / nθ)
+        σ11 = _sigma_min_cert(Hk - z * I)                     # exact small svdbox — the minimizer
+        σ22, info = far_block_sigma_min(Amul, Aadj, n, W, z;  # complement: minimizer removed ⇒ sound
+            prec = prec, kmax = kmax, reorth = reorth)
+        R2max = max(R2max, info.R2)
+        σ11min = min(σ11min, σ11)
+        σ22min = min(σ22min, σ22)
+        push!(floors, R2max < 1 ? _assemble(σ11, σ22, γ) : 0.0)
+    end
+    fl = minimum(floors) - 2 * r * sin(π / (2nθ))
+    return fl,
+    (; floor = fl, radius = r, center = ComplexF64(center), nsep = nsep, m = length(kk),
+        γ = γ, R2 = R2max, σ11min = σ11min, σ22min = σ22min, βN = βN, mr = mr,
+        spectrum = abs.(λ[ord]), certified = (fl > 0 && R2max < 1))
+end
+
+function certify_gap_locked(A::AbstractMatrix; kwargs...)
+    certify_gap_locked(x -> A * x, x -> A' * x, size(A, 1); kwargs...)
 end
