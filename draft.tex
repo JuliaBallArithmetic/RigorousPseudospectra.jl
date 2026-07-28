@@ -989,6 +989,52 @@ work for $G_{22}$, and the single $z$-independent coupling $\overline\gamma$ ---
 matrix is ever formed, and no a-priori assumption on the spectrum is made.
 \end{theorem}
 
+\subsection*{A deep far block by singular deflation}\label{sec:deepfar}
+
+The per-$z$ Lanczos of Proposition~\ref{prop:matfloor} is the tight far-block floor, but it
+costs one Krylov run per $z$. A far cheaper, $z$-uniform bound is available when the far block
+is \emph{deep}. Because the shift enters the far block only diagonally,
+$P_{22}(A-zI)P_{22}=G_{22}-zI$ on $\operatorname{ran}P_{22}$, so by the reverse triangle inequality
+\begin{equation}\label{eq:farshortcut}
+  \sigma_{\min}(G_{22}-zI)\;\ge\;\abs{z}-\norm{G_{22}}_2 ,
+\end{equation}
+\emph{exact for every $z$}, with the single $z$-independent number $\norm{G_{22}}_2$. One verified
+bound on $\norm{G_{22}}_2$ --- a Lanczos on $G_{22}^{*}G_{22}$ at its \emph{top} end --- then covers
+the whole plane; the expensive per-$z$ floor is needed only on the exclusion disc
+$\{\abs{z}\le\norm{G_{22}}_2\}$, where \eqref{eq:farshortcut} is vacuous. This is what lets a
+\emph{single} far-block certificate serve every circle of the sweep at once: the per-eigenvalue
+isolation circles and the block-separating gap circle alike.
+
+The shortcut is only useful when $\norm{G_{22}}_2$ is small, and there the choice of captured
+frame is decisive. If $W_{\mathcal C}$ is the \emph{eigenvector} (Ritz) frame the enclosure
+produces, the far block is \emph{not} deep for non-normal $A$: $\norm{G_{22}}_2=\norm{P_{22}AP_{22}}_2$
+is a \emph{singular-value} quantity, and the eigenvector frame does not span the top singular
+directions. The symptom is exact --- the compression $H=W_{\mathcal C}^{*}AW_{\mathcal C}$ has
+$\sigma_{\max}(H)<\sigma_{\max}(A)$, so even the leading singular direction of $A$ lies partly
+outside $\operatorname{ran}W_{\mathcal C}$, and $\norm{G_{22}}_2$ stays well above $\sigma_{m+1}(A)$
+($m=\dim W_{\mathcal C}$). On a discretized noisy-H\'enon transfer operator with $m=256$ we measure
+$\sigma_{\max}(H)=1.48<\sigma_{\max}(A)=1.71$, and $\norm{G_{22}}_2=0.43$ against $\sigma_{257}(A)=0.12$.
+Rotating \emph{inside} $\operatorname{ran}W_{\mathcal C}$ cannot help: for any unitary $R$,
+$(W_{\mathcal C}R)(W_{\mathcal C}R)^{*}=W_{\mathcal C}W_{\mathcal C}^{*}$, so the singular vectors of
+the block $H$, lifted through the frame, give the \emph{same} projector and the identical
+$\norm{G_{22}}_2$ (confirmed to full precision).
+
+The remedy is to deflate the top singular directions of $A$ themselves. A Lanczos on $A^{*}A$
+(two matvecs per step) at its top end returns an orthonormal $U_k$ approximating the leading $k$
+right singular vectors; augment the captured frame to
+$Q=\operatorname{orth}[\,W_{\mathcal C}\mid U_k\,]$. Then $\norm{P_{22}AP_{22}}_2\to\sigma_{\dim Q+1}$
+(Eckart--Young: deflating the largest singular directions is exactly what minimizes $\norm{PAP}_2$),
+and the far block is genuinely deep. Two points make this rigorous rather than heuristic.
+\emph{First}, no ``$z$-invariance'' of the singular vectors is assumed: $\norm{G_{22}}_2$ is
+$z$-independent and \eqref{eq:farshortcut} is exact, so it is the singular vectors of $A$ --- not of
+$A-zI$ --- that enter, with the $-zI$ on the tail carried exactly as the shift. \emph{Second}, the
+eigenvalue enclosure is untouched: it still reads its discs from the VBD on $W_{\mathcal C}$; only the
+resolvent tail uses the enlarged frame $Q$, so the spectrum is certified by the eigenvector basis
+and the resolvent by the singular basis --- each where it is optimal. On the H\'enon operator the
+augmentation drives $\norm{G_{22}}_2:0.43\to0.13$ and the inter-block coupling
+$\overline\gamma:1.33\to0.37$, deep enough that the shortcut \eqref{eq:farshortcut} covers all the
+leading-eigenvalue circles from one far-block run.
+
 \section{Application: certified range of a polynomial}\label{sec:polyrange}
 
 The spectral enclosure of Theorem~\ref{thm:enclosure} is, at bottom, a verified root

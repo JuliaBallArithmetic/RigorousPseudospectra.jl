@@ -253,16 +253,15 @@ end
 _sigma_min_cert(M::AbstractMatrix) = _sigmin_lower(BallMatrix(Matrix(M)))
 
 # CERTIFIED upper bound on the coupling γ = max(‖P₂₂AW‖₂, ‖P₂₂A*W‖₂) (verified L² opnorm).
-# Use the SVD-based bound (svd_bound_L2_opnorm), NOT the cheap min(Collatz, √(‖·‖₁‖·‖∞)):
-# the coupling matrix is n×m WIDE (m up to nblock), and the cheap geometric-mean/Collatz bound
-# overestimates its spectral norm by ~√(rank) there — measured 5.34 vs true 1.33 (4×) for the
-# whole-Krylov-basis deflation, which alone sank `certify_gap`'s assembly floor negative. γ is
-# computed ONCE (z-independent), so the O(n·m²) verified SVD is negligible against the z-sweep.
-# (For a narrow frame — the locked band, m≈4 — the cheap bound was already tight; this only helps.)
+# Tight AND cheap via the small m×m GRAM: γ = ‖C‖₂ = √σ_max(C*C) with C = P₂₂·(op)·W the n×m WIDE
+# coupling matrix. We must NOT use the cheap min(Collatz, √(‖·‖₁‖·‖∞)) — on the wide matrix it
+# overestimates by ~√rank (measured 5.34 vs true 1.33), which sank the assembly floor. And we
+# should NOT verified-SVD the WIDE n×m C directly (3s at n=4096, m=256); instead svd_bound the
+# `m×m` Hermitian `C*C` (0.5s, identical value) — ‖C‖₂² = ‖C*C‖₂. γ is z-independent, computed once.
 function _coupling_cert(Amul, Aadj, W)
     defl(M) = M .- W * (W' * M)
-    return max(svd_bound_L2_opnorm(BallMatrix(defl(_applycols(Amul, W)))),
-        svd_bound_L2_opnorm(BallMatrix(defl(_applycols(Aadj, W)))))
+    gram(op) = (Cb = BallMatrix(defl(_applycols(op, W))); sqrt(svd_bound_L2_opnorm(Cb' * Cb)))
+    return max(gram(Amul), gram(Aadj))
 end
 
 """
@@ -443,47 +442,108 @@ function _certify_block(Hc::AbstractMatrix, maxsteps::Integer)
         kappa = res.kappa, res = res)
 end
 
-"""
-    certify_leading_eigs(Amul, Aadj, n; nblock=16, neig=5, refine=6, prec=Float64,
-                         frac=0.4, nθ=24) -> (mr, results)
-
-Certify the leading eigenvalues of `A` (matvecs `Amul`, `Aadj`) isolated, by the
-**Krylov–Rump–Miyajima decoupling**:
-
-  1. Arnoldi compresses `A` to the `nblock × nblock` Rayleigh block `H` (and Krylov basis `V`).
-  2. `miyajima_rump(H, vbd_solve(H))` block-diagonalizes `H` — the VBD block-orthonormal frame
-     produces the decoupled frame `mr.W` (`Ã = mr.W⁻¹ H mr.W` almost block-diagonal), certified
-     eigenvalue discs, and the cluster partition.
-  3. For each cluster, the lifted REFINED frame `Wᵢ = V·mr.W[:, cluster]` deflates the cluster
-     cleanly (coupling = its Ritz residual, ~`E`), and `certify_gap_on_circle` (with
-     `auto_radius`) certifies `σ_min(A − zI) > 0` on a circle `Γᵢ` ⇒ `Γᵢ` encloses exactly that
-     cluster ⇒ those eigenvalues are isolated with the returned gap.
-
-Using `mr.W` (not raw Ritz vectors) is what decouples the less-isolated modes; `prec=BigFloat`
-handles strongly non-normal far blocks. `results[k]` carries `(λ, disc, cluster, cert)`.
-
-REMARK (full spectral gap vs eigenvalue isolation). This certifies each leading eigenvalue
-ISOLATED — a small circle `Γᵢ` around it contains no other eigenvalue. That is NOT yet the
-SPECTRAL GAP. Once `λ₁,…,λ_k` are the certified leading eigenvalues, the gap separating that
-block from the rest requires ONE further far-block certificate: deflate ALL `k` certified modes
-(`W = V·mr.W[:, 1:k]`, the refined-frame columns) and certify `σ_min(z − G₂₂) > 0` on a circle
-`Γ_gap` enclosing the REMAINING spectrum `λ_{k+1}, λ_{k+2}, …` — a rigorous resolvent bound on a
-contour enclosing the whole far spectrum `σ(G₂₂)`, the contour certification of Nisoli (Gauss
-paper, arXiv:2602.19435). It is the SAME primitive (`far_block_sigma_min`), run ONCE on the
-bulk-enclosing circle rather than the per-eigenvalue circles, and is the binding, harder step
-for strongly non-normal operators (the far block's pseudospectrum reaches across the gap).
-"""
-function certify_leading_eigs(Amul, Aadj, n::Int; nblock::Int = 16, neig::Int = 5,
-        refine::Integer = 6, prec::Type = Float64, frac::Real = 0.4, nθ::Int = 24)
-    H, V, βN = _arnoldi(Amul, n, nblock)
+# ----------------------------------------------------------------------------------------
+# Shared setup + per-circle assembly — the ONE primitive behind BOTH the leading-eigenvalue
+# isolation circles AND the good/bad separating circle (guide §5 / the matvec §matfree).
+#
+# THREE blocks: GOOD (leading `neig`) + BAD (rest of the certified Arnoldi block) live together
+# in the dense VBD block G₁₁ = W*AW; UGLY = the complement of the whole Krylov basis V (the ball
+# near 0). σ_min(A−zI) is assembled per circle from
+#   • σ₁₁ = block resolvent of G₁₁ (good+bad) — `block_estimate` ⇒ the Miyajima–Rump row-residual
+#     per-block floor `sigma_min_lower` (κ₂-transported; benign for the block-orthonormal VBD
+#     frame), else the exact `svdbox(H−zI)` (κ-free, tight, O(nblock³)/z);
+#   • σ₂₂ = the ONE ugly block — z-INDEPENDENT, so `‖G₂₂‖` is bounded ONCE (a single Lanczos on
+#     G₂₂*G₂₂) and every circle reuses `σ₂₂(z) ≥ |z|−‖G₂₂‖` (1-Lipschitz). The per-z far-block
+#     Lanczos re-triggers ONLY if the ugly block reaches the circle (`|z| ≤ ‖G₂₂‖`).
+#   • γ = the block↔ugly coupling (svd_bound_L2_opnorm), bounded ONCE.
+# So the expensive ugly-block work is done ONCE and shared across all `neig`+1 circles.
+# ----------------------------------------------------------------------------------------
+function _krylov_gap_setup(Amul, Aadj, n::Int; nblock::Int, refine::Integer, reorth::Bool)
+    H, V, βN = _arnoldi(Amul, n, min(nblock, n - 2))
     Hc = ComplexF64.(H)
-    # BallArithmetic VBD (block-orthonormal Schur+Newton). With the warmup-then-merge fix in
-    # `schur_newton_vbd`, separated-but-coupled non-normal eigenvalues decouple before the merge
-    # check, so each distinct eigenvalue gets its own tiny-disc cluster (matches the eigen frame),
-    # while genuine near-defective chains still merge into one block.
     mr = _certify_block(Hc, refine)
+    vr = vbd_resolvent(mr.res)                            # good+bad block resolvent (row-residual)
     λ = mr.centres
     ord = sortperm(abs.(λ); rev = true)
+    γ = _coupling_cert(Amul, Aadj, V)                    # block↔ugly coupling, ONCE (tight svd bound)
+    # ONE ugly-block ‖G₂₂‖ (z-independent): G₂₂ = P_V^⊥ A P_V^⊥, spectrum = the ugly ball near 0.
+    Pv(x) = x .- V * (V' * x)
+    GtG(x) = Pv(ComplexF64.(Aadj(Pv(ComplexF64.(Amul(Pv(x)))))))
+    Lg = lanczos_pro(GtG, n, min(40, n - 2); v0 = Pv(randn(ComplexF64, n)), reorth = reorth)
+    _, _, R1g, R2g = far_floor(Lg)
+    θmaxg = length(Lg.α) <= 1 ? (isempty(Lg.α) ? 0.0 : Lg.α[1]) :
+            maximum(eigvals(SymTridiagonal(Float64.(Lg.α), Float64.(Lg.β[1:(end - 1)]))))
+    G22n = R2g < 1 ? sqrt(max(0.0, θmaxg + R1g / (1 - R2g))) : Inf   # ‖G₂₂‖ upper bound
+    return (; H, Hc, V, βN, mr, vr, λ, ord, γ, G22n, R2g)
+end
+
+# Certify σ_min(A − zI) > 0 on ONE circle Γ = {center + radius·e^{iθ}}, reusing the shared setup.
+function _certify_shared_circle(su, Amul, Aadj, n::Int, center::Number, radius::Real;
+        nθ::Int, block_estimate::Bool, prec::Type, kmax::Int, nullshift::Real, reorth::Bool)
+    r = Float64(radius)
+    floors = Float64[]
+    R2max = su.R2g
+    σ11min = Inf
+    σ22min = Inf
+    ntrig = 0                                             # far-block re-triggers (Lipschitz failed)
+    for t in 0:(nθ - 1)
+        z = center + r * cis(2π * t / nθ)
+        σ11 = block_estimate ? sigma_min_lower(su.vr, z; near = true) :  # good+bad row-residual floor
+              _sigma_min_cert(su.Hc - z * I)                            # or exact svdbox (κ-free)
+        local σ22
+        if su.G22n < abs(z)
+            σ22 = abs(z) - su.G22n                        # ugly deep ⇒ Lipschitz, no per-z Lanczos
+        else
+            σ22, info = far_block_sigma_min(Amul, Aadj, n, su.V, z;     # re-trigger: ugly reaches Γ
+                prec = prec, kmax = kmax, nullshift = nullshift, reorth = reorth)
+            R2max = max(R2max, info.R2)
+            ntrig += 1
+        end
+        σ11min = min(σ11min, σ11)
+        σ22min = min(σ22min, σ22)
+        push!(floors, R2max < 1 ? _assemble(σ11, σ22, su.γ) : 0.0)
+    end
+    fl = minimum(floors) - 2 * r * sin(π / (2nθ))         # 1-Lipschitz arc-cover
+    return fl, (; floor = fl, radius = r, center = ComplexF64(center),
+        γ = su.γ, R2 = R2max, σ11min = σ11min, σ22min = σ22min, G22norm = su.G22n,
+        ntrigger = ntrig, certified = (fl > 0 && R2max < 1))
+end
+
+"""
+    certify_leading_eigs(Amul, Aadj, n; nblock=256, neig=5, refine=6, prec=Float64,
+                         frac=0.4, nθ=24, block_estimate=false) -> (mr, results, …)
+
+Certify the leading eigenvalues of `A` (matvecs `Amul`, `Aadj`) isolated, sharing ONE ugly-block
+Lanczos across all circles (the good/bad/ugly architecture — the same primitive as `certify_gap`):
+
+  1. ONE Arnoldi compresses `A` to a BIG `nblock × nblock` block `H` (basis `V`); `miyajima_rump`
+     block-diagonalizes + certifies it (frame `mr.W`, discs, clusters). GOOD = the leading `neig`,
+     BAD = the rest of `H`, together the dense block `G₁₁`; UGLY = the complement of `V` (ball near 0).
+  2. Bound ONCE (z-independent): the coupling `γ` (block↔ugly, tight `svd_bound_L2_opnorm`) and the
+     ugly-block `‖G₂₂‖` (a single Lanczos on `G₂₂*G₂₂`).
+  3. For each leading eigenvalue, certify `σ_min(A−zI) > 0` on its isolation circle `Γᵢ` by the shared
+     assembly (`_certify_shared_circle`): `σ₁₁` = block resolvent of `G₁₁` on `Γᵢ` (exact `svdbox(H−zI)`,
+     κ-free — default; or the κ₂-transported `block_estimate`), `σ₂₂` = `|z|−‖G₂₂‖` (the ONE ugly block,
+     1-Lipschitz — re-triggers a per-z far Lanczos only if `|z| ≤ ‖G₂₂‖`), assembled with `γ`, closed by
+     the arc-cover. A positive floor ⇒ `Γᵢ` encloses exactly that eigenvalue ⇒ isolated.
+
+`block_estimate=false` (default) uses the κ-free exact `svdbox(H−zI)` for `σ₁₁` — tight, since the
+global κ₂ of the block resolvent (Lemma blockres, `/κ₂(W)`) is charged even to well-isolated modes
+when the spectrum has an ill-conditioned cluster (e.g. a fast cloud), so `svdbox` certifies where
+`block_estimate` fails by ≈κ₂. `results[k]` carries `(λ, disc, cluster, cert)`; `cert.ntrigger` counts
+any ugly-block re-triggers. `prec=BigFloat` for strongly non-normal ugly blocks.
+
+REMARK (isolation vs the spectral gap). This certifies each leading eigenvalue ISOLATED. The gap
+separating the leading block from the rest is the SAME assembly on the good/bad separating circle —
+`certify_gap`, sharing this setup (one Arnoldi block, one VBD, one ugly Lanczos).
+"""
+function certify_leading_eigs(Amul, Aadj, n::Int; nblock::Int = 256, neig::Int = 5,
+        refine::Integer = 6, prec::Type = Float64, frac::Real = 0.4, nθ::Int = 24,
+        block_estimate::Bool = false, kmax::Int = 120, nullshift::Real = 10.0, reorth::Bool = true)
+    # ONE big Arnoldi block + VBD + block resolvent + coupling + one ugly-block ‖G₂₂‖ Lanczos,
+    # shared across all `neig` isolation circles (the ugly block is z-independent — Lipschitz).
+    su = _krylov_gap_setup(Amul, Aadj, n; nblock = nblock, refine = refine, reorth = reorth)
+    mr, V, λ, ord = su.mr, su.V, su.λ, su.ord
     done = Set{Int}()
     leadcols = Int[]                                     # all certified-leading H-columns
     results = NamedTuple[]
@@ -495,18 +555,138 @@ function certify_leading_eigs(Amul, Aadj, n::Int; nblock::Int = 16, neig::Int = 
         c = λ[i]
         gap = minimum((abs(c - λ[j]) for j in eachindex(λ) if !(j in cl));
             init = 2 * maximum(abs, λ))                  # to the nearest DISTINCT eigenvalue
-        Wi = V * mr.W[:, cl]                             # lift the eigenvector frame
-        cert = certify_gap_on_circle(Amul, Aadj, n, Wi, c, frac * gap;
-            prec = prec, auto_radius = true, nθ = nθ)
+        # isolation circle Γᵢ certified by the SAME shared assembly (good+bad block resolvent +
+        # the one ugly block), NOT a per-eigenvalue far-block Lanczos — the ugly Lanczos is reused.
+        _, cert = _certify_shared_circle(su, Amul, Aadj, n, c, frac * gap;
+            nθ = nθ, block_estimate = block_estimate, prec = prec,
+            kmax = kmax, nullshift = nullshift, reorth = reorth)
         push!(results, (; λ = c, disc = mr.radii[i], cluster = length(cl), cert))
     end
     # the certified-leading frame, for a subsequent certify_gap (separation from the fast spectrum)
     Wlead = V * mr.W[:, sort(unique(leadcols))]
-    return (; mr, βN, results, V, Wlead, Hritz = λ[ord])
+    return (; mr, βN = su.βN, results, V, Wlead, Hritz = λ[ord])
 end
 
 function certify_leading_eigs(A::AbstractMatrix; kwargs...)
     certify_leading_eigs(x -> A * x, x -> A' * x, size(A, 1); kwargs...)
+end
+
+export certify_leading_eigs_sing
+
+# ----------------------------------------------------------------------------------------
+# Singular block by matvec: top right singular vectors of A with Ritz σ ≥ `thresh`, via Lanczos
+# on M(x)=A*(A x) (two matvecs/step, full reorthogonalization, basis stored to form Ritz vectors).
+# Grows the basis until the smallest converged Ritz singular value falls below `thresh` — the
+# stopping rule "peel singular vectors until σ < the smallest good eigenvalue" — then keeps the
+# Ritz vectors above `thresh`. These are the "bad" directions the eigenvector frame misses; the
+# far block deflated by them has ‖G₂₂‖ ≈ σ_{k+1} < thresh (deep — the matvec far certifier then
+# converges easily, with a well-separated bottom).
+# ----------------------------------------------------------------------------------------
+function _singular_block(Amul, Aadj, n::Int, thresh::Real; kmax::Int = 256,
+        v0 = randn(ComplexF64, n))
+    Q = zeros(ComplexF64, n, kmax)
+    α = zeros(kmax); β = zeros(kmax)
+    q = ComplexF64.(v0); q ./= norm(q); Q[:, 1] = q
+    qp = zeros(ComplexF64, n); βp = 0.0; kact = kmax
+    thr2 = thresh^2                                               # work in θ = σ² units
+    maxm = 0; since = 0                                           # plateau tracker for #{σ ≥ thresh}
+    for j in 1:kmax
+        w = ComplexF64.(Aadj(ComplexF64.(Amul(Q[:, j]))))         # A*A q  (two matvecs)
+        a = real(dot(Q[:, j], w)); α[j] = a
+        w .-= a .* Q[:, j] .+ βp .* qp
+        for _ in 1:2, i in 1:j                                    # full reorthogonalization
+            c = dot(Q[:, i], w); w .-= c .* Q[:, i]
+        end
+        b = norm(w); β[j] = b
+        # Stop when the COUNT of Ritz values ≥ thresh plateaus — all σ ≥ thresh are captured. Robust
+        # to the large A*A nullspace (its zero Ritz values are < thresh, so they never inflate the
+        # count) — unlike a "converged value < thresh" test, which the nullspace triggers instantly.
+        if j >= 8
+            m = count(≥(thr2), eigvals(SymTridiagonal(α[1:j], β[1:(j - 1)])))
+            m > maxm ? (maxm = m; since = 0) : (since += 1)
+            (since >= 20 && j >= 2maxm + 10) && (kact = j; break)
+        end
+        (b < 1e-12 || j == kmax) && (kact = j; break)
+        Q[:, j + 1] = w ./ b; qp = Q[:, j]; βp = b
+    end
+    F = eigen(SymTridiagonal(α[1:kact], β[1:(kact - 1)]))
+    σ = sqrt.(max.(0.0, F.values))
+    keep = findall(≥(thresh), σ)                                  # singular dirs above the eig scale
+    isempty(keep) && (keep = [argmax(σ)])
+    return Matrix(qr(Q[:, 1:kact] * F.vectors[:, keep]).Q)[:, 1:length(keep)]
+end
+
+"""
+    certify_leading_eigs_sing(Amul, Aadj, n; neig=5, nblock_eig=40, margin=0.8, ...) -> (mr, results, …)
+
+Leading-eigenvalue isolation via the **consolidated good + deep-far** architecture (Arnoldi +
+`A*A` Lanczos): a SMALL eigenvalue block enclosed by Rump–Miyajima, and the far block made deep by
+a **singular** deflation sized by the stopping rule `σ_singular < |λ_min good|`. Distinct from
+`certify_leading_eigs` (per-eigenvalue far Lanczos), which is kept for the ghost-free tight σ11.
+
+  1. Arnoldi → small eigenvalue block `V_g` (`nblock_eig`); `|λ_g|` = the `neig`-th |eigenvalue|.
+  2. `A*A` Lanczos → singular block `U` with `σ ≥ margin·|λ_g|` (`_singular_block`, stopping rule).
+  3. captured frame `Q = orth(V_g ∪ U)` (project `U` against the orthonormal `V_g`, drop the overlap).
+  4. `G₁₁ = Q*AQ` (a FAITHFUL compression: `σ_min(G₁₁−zI) ≈ σ_min(A−zI)`); VBD certifies its eigenvalues.
+  5. far block `‖G₂₂‖` (one Lanczos) + coupling `γ`, both z-independent — the far block is deep
+     (`‖G₂₂‖ < |λ_g|`) so `σ₂₂ = |z|−‖G₂₂‖ > 0` on every good circle (no per-z re-trigger).
+  6. per eigenvalue: adaptive radius (best of `fracs`), `σ₁₁ = svdbox(G₁₁−zI)`, assemble + arc-cover.
+
+`results[k].cert` carries `(floor, radius, σ11, σ22, γ, G22norm, certified)`; `nsing` is the singular
+block size chosen by the stopping rule.
+"""
+function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig::Int = 40,
+        refine::Integer = 6, margin::Real = 0.8, fracs = (0.30, 0.20, 0.12), nθ::Int = 48,
+        kmax::Int = 256, reorth::Bool = true)
+    # 1. small eigenvalue block — the good block to enclose
+    Hg, Vg, βN = _arnoldi(Amul, n, min(nblock_eig, n - 2))
+    λg = eigvals(ComplexF64.(Hg)); ordg = sortperm(abs.(λg); rev = true)
+    λ_min_good = abs(λg[ordg[min(neig, length(ordg))]])
+    # 2. singular block down to the eigenvalue scale (stopping rule σ < margin·|λ_g|)
+    U = _singular_block(Amul, Aadj, n, margin * λ_min_good; kmax = kmax)
+    # 3. augmented captured frame Q = orth(V_g ∪ U); V_g orthonormal ⇒ clean project-and-drop
+    Up = U .- Vg * (Vg' * U)
+    keep = [j for j in axes(Up, 2) if norm(Up[:, j]) > 1e-8]
+    Qf = Matrix(qr(hcat(Vg, Up[:, keep])).Q)[:, 1:(size(Vg, 2) + length(keep))]
+    # 4. faithful captured block G11 = Q*AQ + its VBD (Rump–Miyajima) — certified eigenvalues
+    G11 = Qf' * _applycols(Amul, Qf)
+    Hc = ComplexF64.(G11)
+    mr = _certify_block(Hc, refine)
+    λ = mr.centres; ord = sortperm(abs.(λ); rev = true)
+    # 5. deep far block ‖G₂₂‖ and coupling γ — computed ONCE (z-independent)
+    γ = _coupling_cert(Amul, Aadj, Qf)
+    Pq(x) = x .- Qf * (Qf' * x)
+    GtG(x) = Pq(ComplexF64.(Aadj(Pq(ComplexF64.(Amul(Pq(x)))))))
+    Lg = lanczos_pro(GtG, n, min(40, n - 2); v0 = Pq(randn(ComplexF64, n)), reorth = reorth)
+    _, _, R1g, R2g = far_floor(Lg)
+    θmaxg = length(Lg.α) <= 1 ? (isempty(Lg.α) ? 0.0 : Lg.α[1]) :
+            maximum(eigvals(SymTridiagonal(Float64.(Lg.α), Float64.(Lg.β[1:(end - 1)]))))
+    G22n = R2g < 1 ? sqrt(max(0.0, θmaxg + R1g / (1 - R2g))) : Inf
+    # 6. per leading eigenvalue: adaptive-radius isolation
+    results = NamedTuple[]
+    for i in ord[1:min(neig, length(ord))]
+        c = λ[i]
+        gap = minimum((abs(c - λ[j]) for j in eachindex(λ) if j != i); init = 2 * maximum(abs, λ))
+        best = (; floor = -Inf, radius = 0.0, σ11 = 0.0, σ22 = 0.0)
+        for fr in fracs
+            r = fr * gap
+            σ11 = minimum(_sigma_min_cert(Hc - (c + r * cis(2π * t / nθ)) * I) for t in 0:(nθ - 1))
+            minz = minimum(abs(c + r * cis(2π * t / nθ)) for t in 0:(nθ - 1))
+            σ22 = G22n < minz ? minz - G22n : 0.0
+            fl = _assemble(σ11, σ22, γ) - 2 * r * sin(π / (2nθ))
+            fl > best.floor && (best = (; floor = fl, radius = r, σ11, σ22))
+        end
+        push!(results, (; λ = c, disc = mr.radii[i], cluster = 1,
+            cert = (; floor = best.floor, radius = best.radius, center = ComplexF64(c),
+                σ11min = best.σ11, σ22min = best.σ22, γ = γ, G22norm = G22n,
+                certified = best.floor > 0 && R2g < 1)))
+    end
+    return (; mr, βN, results, V = Vg, U, Q = Qf, λ_min_good, G22norm = G22n, γ,
+        nsing = length(keep), dimQ = size(Qf, 2), Hritz = λ[ord])
+end
+
+function certify_leading_eigs_sing(A::AbstractMatrix; kwargs...)
+    certify_leading_eigs_sing(x -> A * x, x -> A' * x, size(A, 1); kwargs...)
 end
 
 # ----------------------------------------------------------------------------------------
@@ -546,62 +726,19 @@ function certify_gap(Amul, Aadj, n::Int; nsep::Int = 5, nblock::Int = 256,
         radius::Union{Nothing, Real} = nothing, center::Number = 0, refine::Integer = 6,
         block_estimate::Bool = false, nθ::Int = 64, prec::Type = Float64,
         kmax::Int = 0, nullshift::Real = 10.0, reorth::Bool = true)
-    H, V, βN = _arnoldi(Amul, n, min(nblock, n - 2))
-    Hc = ComplexF64.(H)
-    # BallArithmetic VBD: block-orthonormal Schur+Newton frame ⇒ κ(W) governed by benign
-    # inter-block angles, NOT the intra-block non-normality, plus the certified block spectrum.
-    mr = _certify_block(Hc, refine)
-    # σ₁₁ = σ_min(H − zI) of the captured block. By default the EXACT `svdbox(H−zI)` — for a
-    # moderate block (`nblock` ≲ hundreds) it is O(nblock³) ≈ ms/sample and κ₂-FREE. The
-    # `block_estimate` path (`vbd_resolvent`/`sigma_min_lower`: a small SVD per diagonal block)
-    # is cheaper for a HUGE block but pays a `κ₂(W)` transport factor — use it only when the
-    # full svdbox is too big.
-    vr = block_estimate ? vbd_resolvent(mr.res) : nothing
-    λ = mr.centres
-    ord = sortperm(abs.(λ); rev = true)
+    # Same shared setup as the isolation circles (one Arnoldi block, VBD, block resolvent,
+    # coupling, one ugly-block ‖G₂₂‖ Lanczos) — here applied to the good/bad SEPARATING circle.
+    su = _krylov_gap_setup(Amul, Aadj, n; nblock = nblock, refine = refine, reorth = reorth)
+    λ, ord = su.λ, su.ord
+    # radius defaults to √(|λ_{nsep}|·|λ_{nsep+1}|): a circle in the gap below the leading `nsep`.
     r = radius === nothing ?
         sqrt(abs(λ[ord[nsep]]) * abs(λ[ord[min(nsep + 1, length(ord))]])) : Float64(radius)
-    γ = _coupling_cert(Amul, Aadj, V)                    # certified coupling (≈ β_N)
-
-    # Certified ‖G₂₂‖ (z-independent): largest eigenvalue of G₂₂*G₂₂ via Lanczos (the MAX
-    # converges fast) + deviation lemma. For a low-rank / deep far block (everything captured in
-    # the block) G₂₂ ≈ 0, so σ_min(z−G₂₂) ≥ |z| − ‖G₂₂‖ directly — the per-z σ_min Lanczos can't
-    # certify a trivial/empty far block (it breaks at k=1 with the complement unseen).
-    Pv(x) = x .- V * (V' * x)
-    GtG(x) = Pv(ComplexF64.(Aadj(Pv(ComplexF64.(Amul(Pv(x)))))))
-    Lg = lanczos_pro(GtG, n, min(40, n - 2); v0 = Pv(randn(ComplexF64, n)), reorth = reorth)
-    _, _, R1g, R2g = far_floor(Lg)
-    θmaxg = length(Lg.α) <= 1 ? (isempty(Lg.α) ? 0.0 : Lg.α[1]) :
-            maximum(eigvals(SymTridiagonal(Float64.(Lg.α), Float64.(Lg.β[1:(end - 1)]))))
-    G22n = R2g < 1 ? sqrt(max(0.0, θmaxg + R1g / (1 - R2g))) : Inf   # ‖G₂₂‖ upper bound
-
-    floors = Float64[]
-    R2max = R2g
-    σ22min = Inf
-    for t in 0:(nθ - 1)
-        z = center + r * cis(2π * t / nθ)
-        σ11 = block_estimate ? sigma_min_lower(vr, z; near = true) :  # per-block, κ₂-transported
-              _sigma_min_cert(Hc - z * I)                            # exact full svdbox (default)
-        # deep far block ⇒ σ_min(z−G₂₂) ≥ |z| − ‖G₂₂‖ (z-independent, no Lanczos); only if the far
-        # block reaches the circle (‖G₂₂‖ ≥ |z|) fall back to the per-z far-block σ_min certificate.
-        local σ22
-        if G22n < abs(z)
-            σ22 = abs(z) - G22n
-        else
-            σ22, info = far_block_sigma_min(Amul, Aadj, n, V, z;
-                prec = prec, kmax = kmax, nullshift = nullshift, reorth = reorth)
-            R2max = max(R2max, info.R2)
-        end
-        σ22min = min(σ22min, σ22)
-        push!(floors, R2max < 1 ? _assemble(σ11, σ22, γ) : 0.0)
-    end
-    fl = minimum(floors) - 2 * r * sin(π / (2nθ))
+    fl, ci = _certify_shared_circle(su, Amul, Aadj, n, center, r;
+        nθ = nθ, block_estimate = block_estimate, prec = prec,
+        kmax = kmax, nullshift = nullshift, reorth = reorth)
     return fl,
-    (; floor = fl, radius = r, center = ComplexF64(center),
-        nsep = nsep, nblock = size(V, 2),
-        γ = γ, R2 = R2max, σ22min = σ22min, G22norm = G22n, βN = βN, mr = mr,
-        block_estimate = block_estimate, spectrum = abs.(λ[ord]),
-        certified = (fl > 0 && R2max < 1))
+    (; ci..., nsep = nsep, nblock = size(su.V, 2), βN = su.βN, mr = su.mr,
+        block_estimate = block_estimate, spectrum = abs.(λ[ord]))
 end
 
 function certify_gap(A::AbstractMatrix; kwargs...)
