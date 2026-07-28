@@ -253,10 +253,16 @@ end
 _sigma_min_cert(M::AbstractMatrix) = _sigmin_lower(BallMatrix(Matrix(M)))
 
 # CERTIFIED upper bound on the coupling γ = max(‖P₂₂AW‖₂, ‖P₂₂A*W‖₂) (verified L² opnorm).
+# Use the SVD-based bound (svd_bound_L2_opnorm), NOT the cheap min(Collatz, √(‖·‖₁‖·‖∞)):
+# the coupling matrix is n×m WIDE (m up to nblock), and the cheap geometric-mean/Collatz bound
+# overestimates its spectral norm by ~√(rank) there — measured 5.34 vs true 1.33 (4×) for the
+# whole-Krylov-basis deflation, which alone sank `certify_gap`'s assembly floor negative. γ is
+# computed ONCE (z-independent), so the O(n·m²) verified SVD is negligible against the z-sweep.
+# (For a narrow frame — the locked band, m≈4 — the cheap bound was already tight; this only helps.)
 function _coupling_cert(Amul, Aadj, W)
     defl(M) = M .- W * (W' * M)
-    return max(upper_bound_L2_opnorm(BallMatrix(defl(_applycols(Amul, W)))),
-        upper_bound_L2_opnorm(BallMatrix(defl(_applycols(Aadj, W)))))
+    return max(svd_bound_L2_opnorm(BallMatrix(defl(_applycols(Amul, W)))),
+        svd_bound_L2_opnorm(BallMatrix(defl(_applycols(Aadj, W)))))
 end
 
 """

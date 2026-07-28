@@ -54,8 +54,11 @@ the bound degenerates. We give the geometric picture (the off-diagonal of $W^{-1
 removes it), the algorithm, the Miyajima proof, and experiments, including the
 Gauss--Kuzmin--Wirsing transfer operator in extended precision. Finally we extend the
 method to operators available \emph{only through matrix--vector products}: the near-target
-eigenvalues are captured in a small dense block, and the complementary far block is
-certified by a projected Lanczos process whose loss of orthogonality is bounded
+eigenvalues are captured in a small dense block by an Arnoldi compression (the non-symmetric
+$A$ reduces to an upper Hessenberg Rayleigh block, never a tridiagonal one), and the
+complementary far block is certified by a projected Lanczos process on the \emph{Hermitian}
+$M_z=(G_{22}-zI)^{*}(G_{22}-zI)$ (tridiagonal because $M_z$ is Hermitian, not $A$) whose loss
+of orthogonality is bounded
 \emph{a posteriori} from scalar coefficients via Paige's recurrence --- with no stored
 basis. Run to a full basis, the single Neumann residual $\norm{R_2}_2<1$ certifies at once
 that the Lanczos frame is invertible and that it is complete, so no eigenvalue escapes the
@@ -791,7 +794,11 @@ reappears here and, remarkably, certifies at once that the Lanczos frame is inve
 
 \subsection*{The two-block split}
 
-Run the VBD of Section~\ref{sec:algo} on the cluster of eigenvalues near $z$, producing a
+The captured cluster is produced by an \emph{Arnoldi} compression of the matvec operator: a
+few steps of Arnoldi reduce $A$ to a small dense upper Hessenberg Rayleigh block $H$ (the
+non-symmetry of $A$ enters here, as a Hessenberg rather than a tridiagonal reduction), whose
+Ritz values approximate the near-$z$ eigenvalues. Run the VBD of Section~\ref{sec:algo} on
+that dense block $H$ --- \emph{not} on $A$ --- producing a
 block-orthonormal frame $W_{\mathcal C}\in\C^{n\times m}$ ($m$ small) with
 $W_{\mathcal C}^{*}W_{\mathcal C}=I_m$ exactly. Because the columns are orthonormal,
 \[
@@ -820,7 +827,10 @@ matvecs on $A,A^{*}$ per application).
 \subsection*{The Paige recurrence: basis conditioning without a stored basis}
 
 Lanczos on the Hermitian $M_z$ builds an orthonormal Krylov basis of
-$\operatorname{ran}P_{22}$ by a three-term recurrence; in finite precision the computed
+$\operatorname{ran}P_{22}$ by a three-term recurrence --- a genuine \emph{tridiagonal}
+Lanczos, legitimate precisely because $M_z=M_z^{*}$ (the non-symmetric $A$ was already
+absorbed into the Arnoldi/Hessenberg reduction of the captured block, and enters $M_z$ only
+through the two matvecs $A,A^{*}$); in finite precision the computed
 $\bar q_j$ satisfy
 \begin{equation}\label{eq:lanczos-fp}
   \bar\beta_j\bar q_{j+1}=M_z\bar q_j-\bar\alpha_j\bar q_j-\bar\beta_{j-1}\bar q_{j-1}+f_j,
