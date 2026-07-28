@@ -252,6 +252,26 @@ end
 # VERIFIED σ_min lower bound of a (complex) matrix via the rigorous SVD (BallArithmetic.svdbox).
 _sigma_min_cert(M::AbstractMatrix) = _sigmin_lower(BallMatrix(Matrix(M)))
 
+# Certified lower bound on σ_min(M − wI) over the WHOLE circle {center + radius·e^{iθ}}, via an
+# ADAPTIVE PEARL cover. At each pearl centre z a point svdbox gives σ(z)=σ_min(M−zI); since
+# σ_min(M−wI) is 1-Lipschitz in w, the pearl {|w−z|≤ρ} is certified at `σ(z)−ρ`, and we advance
+# Δθ = 2ρ/radius so the pearls overlap. The radius ρ = safety·σ(z) is set by the LOCAL σ_min — big
+# pearls where σ_min is large, small where small — so smooth arcs cost one SVD and the whole circle
+# takes O(∮ dθ·radius/σ) SVDs instead of a fixed uniform nθ. (Using `M−Ball(z,ρ)I` instead would
+# perturb each diagonal INDEPENDENTLY — a far bigger set than the common shift — and is much looser.)
+function _sigmin_circle(M::AbstractMatrix, center::Number, radius::Real;
+        safety::Real = 0.5, ρfloor::Real = 0.02, maxpearls::Int = 4096)
+    smin = Inf; θ = 0.0; np = 0
+    while θ < 2π && np < maxpearls
+        z = ComplexF64(center) + radius * cis(θ)
+        σz = _sigma_min_cert(M - z * I)                       # point svdbox (common shift, exact)
+        ρ = max(safety * max(σz, 0.0), ρfloor * radius)       # pearl radius from the local σ_min
+        smin = min(smin, σz - ρ)                              # 1-Lipschitz cover of |w−z| ≤ ρ
+        θ += 2ρ / radius; np += 1
+    end
+    return smin
+end
+
 # CERTIFIED upper bound on the coupling γ = max(‖P₂₂AW‖₂, ‖P₂₂A*W‖₂) (verified L² opnorm).
 # Tight AND cheap via the small m×m GRAM: γ = ‖C‖₂ = √σ_max(C*C) with C = P₂₂·(op)·W the n×m WIDE
 # coupling matrix. We must NOT use the cheap min(Collatz, √(‖·‖₁‖·‖∞)) — on the wide matrix it
@@ -571,7 +591,7 @@ function certify_leading_eigs(A::AbstractMatrix; kwargs...)
     certify_leading_eigs(x -> A * x, x -> A' * x, size(A, 1); kwargs...)
 end
 
-export certify_leading_eigs_sing
+export certify_leading_eigs_sing, pseudospectrum_outside
 
 # ----------------------------------------------------------------------------------------
 # Singular block by matvec: top right singular vectors of A with Ritz σ ≥ `thresh`, via Lanczos
@@ -636,7 +656,7 @@ a **singular** deflation sized by the stopping rule `σ_singular < |λ_min good|
 block size chosen by the stopping rule.
 """
 function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig::Int = 40,
-        refine::Integer = 6, margin::Real = 0.8, fracs = (0.30, 0.20, 0.12), nθ::Int = 48,
+        refine::Integer = 6, margin::Real = 0.8, fracs = (0.30, 0.20, 0.12),
         kmax::Int = 256, reorth::Bool = true)
     # 1. small eigenvalue block — the good block to enclose
     Hg, Vg, βN = _arnoldi(Amul, n, min(nblock_eig, n - 2))
@@ -670,10 +690,12 @@ function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig
         best = (; floor = -Inf, radius = 0.0, σ11 = 0.0, σ22 = 0.0)
         for fr in fracs
             r = fr * gap
-            σ11 = minimum(_sigma_min_cert(Hc - (c + r * cis(2π * t / nθ)) * I) for t in 0:(nθ - 1))
-            minz = minimum(abs(c + r * cis(2π * t / nθ)) for t in 0:(nθ - 1))
+            # σ11 certified over the WHOLE circle by the pearl cover (no arc-cover needed); σ22 from
+            # the exact circle-minimum |z| (analytic) minus the z-independent deep ‖G₂₂‖.
+            σ11 = _sigmin_circle(Hc, c, r)
+            minz = abs(c) - r                                 # min |z| on the circle around c
             σ22 = G22n < minz ? minz - G22n : 0.0
-            fl = _assemble(σ11, σ22, γ) - 2 * r * sin(π / (2nθ))
+            fl = _assemble(σ11, σ22, γ)
             fl > best.floor && (best = (; floor = fl, radius = r, σ11, σ22))
         end
         push!(results, (; λ = c, disc = mr.radii[i], cluster = 1,
@@ -681,8 +703,25 @@ function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig
                 σ11min = best.σ11, σ22min = best.σ22, γ = γ, G22norm = G22n,
                 certified = best.floor > 0 && R2g < 1)))
     end
-    return (; mr, βN, results, V = Vg, U, Q = Qf, λ_min_good, G22norm = G22n, γ,
-        nsing = length(keep), dimQ = size(Qf, 2), Hritz = λ[ord])
+    return (; mr, βN, results, V = Vg, U, Q = Qf, G11 = Hc, λ_min_good, G22norm = G22n, γ,
+        R2g, nsing = length(keep), dimQ = size(Qf, 2), Hritz = λ[ord])
+end
+
+"""
+    pseudospectrum_outside(out, z) -> certified lower bound on σ_min(A − zI), for |z| > ‖G₂₂‖
+
+Certified `σ_min(A − zI)` for a point `z` OUTSIDE the far circle, from a `certify_leading_eigs_sing`
+result `out`. Outside the far circle the far block is deep, so `σ₂₂ = |z| − ‖G₂₂‖` (z-independent),
+and `σ₁₁ = svdbox(G₁₁ − zI)` is the FAITHFUL block resolvent (`σ_min(G₁₁−zI) ≈ σ_min(A−zI)`);
+assembled with the coupling `γ`. Returns `0` inside the far circle (where this bound is vacuous).
+Use over a grid to plot the rigorous ε-pseudospectrum outside the far circle.
+"""
+function pseudospectrum_outside(out, z::Number)
+    r = abs(z)
+    r <= out.G22norm && return 0.0
+    σ11 = _sigma_min_cert(out.G11 - z * I)
+    σ22 = r - out.G22norm
+    return (out.R2g < 1) ? _assemble(σ11, σ22, out.γ) : 0.0
 end
 
 function certify_leading_eigs_sing(A::AbstractMatrix; kwargs...)
