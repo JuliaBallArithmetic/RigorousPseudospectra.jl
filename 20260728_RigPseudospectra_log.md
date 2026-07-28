@@ -49,3 +49,33 @@ good & bad, ugly far away" structure.
   three-block story and certifies at nθ=256.
 - Bigger direction (Nisoli's suggestion): follow the σ_min=ε pseudospectral level curve instead
   of a circle (the dormant src/pseudospectra/ engine) — hugs the 4.6× non-normal bulge.
+
+## Consolidated matvec isolation pipeline (certify_leading_eigs_sing) — evening
+
+New function `certify_leading_eigs_sing` (RPS commits 50d82ed, e41fcfb): good + deep-far
+architecture. Arnoldi (small eigen block) + A*A Lanczos (singular block, `_singular_block`,
+stopping rule "peel σ until < |λ_g|", plateau-count detection robust to A*A's large nullspace)
+→ Q = orth(V∪U) a FAITHFUL compression (σ_min(Q*AQ−zI) ≈ σ_min(A−zI) to ~3%, measured 14t) →
+VBD on G11 + deep far block (‖G22‖<|λ_g|, matvec far certifier converges easily).
+
+Key measurements (Hénon depth 6, examples 14h–14w):
+- svdbox on the FULL 256-block is TIGHT (14h); no Arnoldi ghost — true σ_min(A−zI) genuinely
+  small on the gap circle, 4.6× non-normal bulge (14i).
+- Eigenvector deflation is 3.7× INEFFICIENT at the operator norm: ‖P_V A P_V‖=0.43 vs σ_257=0.12,
+  because σ₁(H)=1.48 < σ₁(A)=1.71 — the top singular directions leak outside the Krylov space
+  (14k, 14o, 14p). Fix = deflate A's SINGULAR vectors (A*A Lanczos), not eigenvectors.
+- The block's own singular vectors span span(V) ⇒ deflating them = deflating V (0.43, identical);
+  only A*A's singular vectors reach σ_{k+1} (14p). Bit-exact confirmation.
+- adaptive pearl cover (point svdbox + 1-Lipschitz, ρ=safety·σ_min(z)) replaces uniform nθ:
+  Hénon 5 leading all ✓ in 34s (was 175s at nθ=384). NOTE M−Ball(z,ρ)I perturbs each diagonal
+  independently (far looser) — common-shift Lipschitz is the right pearl.
+
+Results:
+- **Hénon, 5 leading eigenvalues: ALL certified** σ_min ≥ 1.02e-2 … 1.78e-4 (matvec-only, 34s).
+- **Lorenz, Float64: 3/5** (0.999→2.18e-2, 0.315 pair→4.8e-5); deepest pair (|λ|=0.269=|λ_g|)
+  σ11 slightly negative — κ₂=4.7e5, svdbox hits Float64 floor; needs BigFloat (a `prec` knob TODO).
+- **Rigorous pseudospectra plot** outside the far circle (`pseudospectrum_outside`, svdbox(G11) —
+  κ-free/faithful; the block resolvent would pay κ₂=5036, useless): examples/14_henon_pseudo.png.
+
+draft.tex §matfree updated with the deep-far-block-by-singular-deflation subsection.
+Old certify_leading_eigs / certify_gap / certify_gap_locked kept intact.
