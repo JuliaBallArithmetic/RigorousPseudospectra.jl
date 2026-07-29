@@ -660,7 +660,7 @@ block size chosen by the stopping rule.
 function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig::Int = 40,
         Rcirc::Union{Nothing, Real} = nothing, far_frac::Real = 0.9, refine::Integer = 6,
         margin::Real = 0.8, fracs = (0.30, 0.20, 0.12), prec::Type = Float64, ρfloor::Real = 0.004,
-        tighten::Bool = false, kmax::Int = 256, reorth::Bool = true)
+        tighten::Bool = true, kmax::Int = 256, reorth::Bool = true)
     # 1. eigenvalue block — the good block to enclose
     Hg, Vg, βN = _arnoldi(Amul, n, min(nblock_eig, n - 2))
     λg = eigvals(ComplexF64.(Hg)); ordg = sortperm(abs.(λg); rev = true)
@@ -712,27 +712,41 @@ function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig
             fl = _assemble(σ11, σ22, γ)
             fl > best.floor && (best = (; floor = fl, radius = r, σ11, σ22))
         end
-        # Enclosure of A's eigenvalue. FAST default (`tighten=false`): the Bauer–Fike estimate
-        # `κ(λᵢ)·‖lifted Ritz residual‖` — κ from the frame (one inv), the residual of the lifted
-        # eigenvector `Q·W[:,i]` against A (one matvec). Cheap and tight; unlike the M-R disc, which
-        # blows up for the big ill-conditioned augmented block. RIGOROUS opt-in (`tighten=true`): the
-        # SMALLEST radius still certifying floor>0 (bisect) — `σ_min(A−zI)>0` + count 1 ⇒ A's
-        # eigenvalue lies inside it. The bisection is 14 pearl-covers/eigenvalue, hence off by default.
+        # Enclosure of A's eigenvalue, in TWO steps: a cheap heuristic to find the SCALE, then ONE
+        # rigorous verification there (not a blind bisection). (1) Bauer–Fike estimate `r_heur =
+        # κ(λᵢ)·‖lifted Ritz residual‖` — κ from the frame (one inv), residual of the lifted
+        # eigenvector `Q·W[:,i]` against A (one matvec). (2) starting a few × `r_heur`, GROW the
+        # circle until one pearl cover certifies floor>0: `σ_min(A−zI)>0` + count 1 ⇒ A's eigenvalue
+        # lies inside — a rigorous enclosure `renc`, at ~1–3 pearl covers instead of 14 blind ones.
         κi = norm(@view mr.W[:, i]) * norm(@view Winv[i, :])
         qi = Qf * mr.W[:, i]; qi ./= norm(qi)
-        renc = κi * norm(ComplexF64.(Amul(qi)) .- λ[i] .* qi)         # Bauer–Fike (heuristic)
+        r_heur = κi * norm(ComplexF64.(Amul(qi)) .- λ[i] .* qi)     # Bauer–Fike scale estimate
+        renc = NaN
         if tighten && best.floor > 0 && R2g < 1
-            rlo, rhi = 0.0, best.radius
-            for _ in 1:14
-                rm = (rlo + rhi) / 2
-                σ11 = Float64(_sigmin_circle(Hcp, c, rm; ρfloor = ρfloor))
-                minz = abs(c) - rm; σ22 = G22n < minz ? minz - G22n : 0.0
-                _assemble(σ11, σ22, γ) > 0 ? (rhi = rm) : (rlo = rm)
+            # (a) CHEAP Float64 probe: grow r from the heuristic scale until the (non-rigorous) σ_min
+            # at `c+r` matches the linear estimate `r/κ` — i.e. it has cleared the numerical noise
+            # floor (below that, svdvals is just machine noise, not the true σ_min).
+            r = max(r_heur, 1e-14 * max(abs(c), 1.0))
+            for _ in 1:60
+                (minimum(svdvals(Hc - (c + r) * I)) >= 0.5 * r / κi) && break
+                r *= 1.5
             end
-            renc = rhi
+            # (b) TRIPLE the distance for margin, then do the RIGOROUS pearl cover there — growing ×3
+            # if it still fails. Floor the rigorous radius at ~1e-7·|c|: the verified svdbox floor
+            # `κ(G₁₁)·eps` is well above the Float64 svdvals floor, and svdbox of a NEAR-singular block
+            # (tiny r) is extremely slow — so we never probe below a svdbox-safe scale in Float64.
+            # `prec=BigFloat` lowers both floors for a tighter enclosure.
+            r = clamp(3 * r, 1e-7 * max(abs(c), 1.0), best.radius)
+            for _ in 1:10
+                σ11 = Float64(_sigmin_circle(Hcp, c, r; ρfloor = ρfloor))
+                minz = abs(c) - r; σ22 = G22n < minz ? minz - G22n : 0.0
+                (_assemble(σ11, σ22, γ) > 0) && (renc = r; break)
+                r >= best.radius && break
+                r = min(3 * r, best.radius)
+            end
         end
         push!(results, (; λ = c, disc = mr.radii[i], cluster = 1,
-            cert = (; floor = best.floor, radius = best.radius, enclosure = renc,
+            cert = (; floor = best.floor, radius = best.radius, enclosure = renc, r_heur = r_heur,
                 center = ComplexF64(c), σ11min = best.σ11, σ22min = best.σ22, γ = γ, G22norm = G22n,
                 certified = best.floor > 0 && R2g < 1)))
     end
