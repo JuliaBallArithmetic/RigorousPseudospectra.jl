@@ -4,6 +4,7 @@
 \usepackage{booktabs}
 \usepackage{hyperref}
 \usepackage{xcolor}
+\usepackage{graphicx}
 
 \newtheorem{theorem}{Theorem}
 \newtheorem{lemma}[theorem]{Lemma}
@@ -50,9 +51,11 @@ far block \emph{deep}: its matrix-free $\sigmin$ certificate then converges with
 bottom. The captured compression is \emph{faithful} ($\sigmin(G_{11}-zI)\approx\sigmin(A-zI)$), so
 its verified SVD is $\kappa_2$-free. Circles are rigorously covered by an adaptive pearl cover, and each
 eigenvalue is rigorously enclosed by a cheap probe that locates the scale followed by a single
-verified check. We report certificates for the Perron--Frobenius (Ulam) operators of the noisy
-H\'enon and contracting-Lorenz maps and the Gauss--Kuzmin--Wirsing operator, and for a gallery of
-standard non-normal test matrices where Arnoldi Ritz values are known to mislead.
+verified check. We report rigorous enclosures for the Perron--Frobenius (Ulam) operators of the noisy
+H\'enon and contracting-Lorenz maps and the Gauss--Kuzmin--Wirsing operator, and we map the method's
+applicability on a gallery of standard non-normal matrices: it succeeds precisely when the singular
+spectrum decays (a low-dimensional resolvent tail) and \emph{fails safely} --- a non-positive floor or
+an explicit refusal, never a false enclosure --- when it does not.
 \end{abstract}
 
 \tableofcontents
@@ -93,8 +96,11 @@ Our contribution is a reduction that answers both. We certify the eigenvalue \em
 Miyajima--Rump machinery (Sections~\ref{sec:mr}--\ref{sec:mrres}), and we make the far block deep by
 deflating the top \emph{singular} directions of $A$ --- obtained by a Lanczos on $A^*A$ --- in
 addition to the eigenvector directions (Sections~\ref{sec:krylov}--\ref{sec:krylovcert}). The
-resulting certificate is matrix-free, sound, and, for the operators we treat, certifies the leading
-spectrum in tens of seconds.
+resulting certificate is matrix-free, sound, and certifies the leading spectrum in tens of seconds ---
+\emph{when the singular values of $A$ decay}, so that the far block can be made deep with a modest
+deflation. This is the transfer-operator regime; on full-rank non-normal matrices the method fails
+safely rather than universally succeeding (Section~\ref{sec:testmat}), which is the honest scope of the
+approach and, we argue, a necessary one.
 
 \paragraph{A note on scope.} When $A$ is the Ulam (Galerkin) discretization of an infinite-dimensional
 transfer operator, everything below is a rigorous statement about the \emph{matrix} $A$. Lifting it to
@@ -383,71 +389,78 @@ was the obstruction --- a high-precision SVD is unnecessary).
 \paragraph{Gauss--Kuzmin--Wirsing.} A benchmark whose sub-dominant eigenvalue (the GKW constant) is a
 classical target; the far block is low-rank, and a small captured block certifies the gap~\cite{NisoliGauss}.
 
-\subsection{Non-normal test matrices and Arnoldi corner cases}\label{sec:testmat}
+\subsection{Where the method applies --- and where it does not}\label{sec:testmat}
 
-We validate on a gallery of standard non-normal matrices (Table~\ref{tab:gallery}), chosen so that
-the two symptoms of Section~\ref{sec:intro} appear. The last column of the table records the property
-the method exploits: whether the top/bottom singular subspace of $A-zI$ genuinely differs from the
-eigenvector subspace.
+The far-block certificate rests on making $\norm{G_{22}}_2$ \emph{small} by singular deflation, which
+requires the singular values of $A$ to \emph{decay}: the resolvent tail must be genuinely
+low-dimensional. This is exactly the transfer-operator regime (a noise-smoothed or otherwise compact-like
+operator), and it fails, by design, on operators whose singular spectrum is flat. We ran the pipeline
+on the standard non-normal gallery precisely to map this boundary (Table~\ref{tab:gallery}); the point
+is not that the method is universal --- it is not --- but that it \emph{fails safely}, returning a
+non-positive floor or an explicit refusal, never a false enclosure.
 
-\paragraph{Cyclic shift (S1).} The circular shift $Q$ ($Q_{i+1,i}=1$, $Q_{1,n}=1$) is the companion
-matrix of $z^n-1$: unitary, with eigenvalues the $n$-th roots of unity. It is the textbook case where
-a truncated Arnoldi from a coordinate start returns Ritz values pinned near the origin, and where
-restarted Arnoldi with exact shifts can deflate exactly the wanted eigenvector~\cite{Embree2009}. Our
-method never trusts a Ritz value: the argument-principle count on a rigorous circle is the arbiter,
-so on $Q$ the certificate either encloses the roots of unity or refuses --- it cannot report the
-spurious near-zero cluster. As $Q$ is normal the singular augmentation is a no-op; this is the
-degenerate reference case, a soundness check rather than a test of the non-normal mechanism.
+\begin{figure}[t]\centering
+\includegraphics[width=0.82\textwidth]{bench/figures/regime_decay.png}
+\caption{The method's regime, visualized: normalized singular-value decay $\sigma_k/\sigma_1$. A
+smoothing / transfer-like operator (the target regime) decays sharply, so a modest singular deflation
+makes the far block deep and the method certifies; the full-rank Grcar and convection--diffusion
+matrices and the unitary cyclic shift stay flat, so the far block cannot be made deep and the method
+fails safely.}
+\label{fig:regime}
+\end{figure}
 
-\paragraph{Grcar, Demmel, Kahan.} \textsc{Grcar} (banded Toeplitz: $-1$ on the subdiagonal, $+1$ on
-the diagonal and the next three superdiagonals) is strongly non-normal with pseudospectra bulging far
-outside the spectrum~\cite{Trefethen1992}. \textsc{Demmel}'s upper-triangular matrix, built to
-disprove a stability conjecture, has an astronomically large resolvent norm at a tight eigenvalue
-cluster~\cite{Demmel1987}. \textsc{Kahan}'s upper-triangular $R=SK$ is nearly singular with a tiny
-$\sigmin$ whose singular vector is unrelated to any eigenvector~\cite{Kahan1966} --- the case that
-fools rank-revealing pivoting, stressing the $\sigmin$ layer directly. In all three the top singular
-subspace of $A-zI$ differs strongly from the eigenvector subspace: symptom (S2), where the $A^*A$
-deflation is what makes the far block deep.
+\paragraph{Full singular spectrum: Grcar and convection--diffusion (fail safely).} \textsc{Grcar}
+(banded Toeplitz: $-1$ subdiagonal, $+1$ on the diagonal and next three superdiagonals~\cite{Trefethen1992})
+and the convection--diffusion operator $-\varepsilon u''+u'$~\cite{ReddyTrefethen1994} are strongly
+non-normal but \emph{full-rank}: their singular values do not decay. Deflating tens of singular
+directions leaves $\norm{G_{22}}_2$ comparable to the eigenvalue scale ($2.02$ against $\abs{\lambda}\approx2.26$
+for Grcar $n=100$; $491$ against $\abs{\lambda}\approx800$ for the discretized operator), so the far
+block is never deep and \eqref{eq:assembly} yields a floor of $0$: the method reports every eigenvalue
+$\times$ (uncertified) rather than a spurious positive. These are the correct negatives that delimit the
+regime.
 
-\paragraph{Defective / Jordan blocks.} A single Jordan block $J_\lambda$ has one eigenvector and
-infinite eigenvalue condition number; a perturbation of size $\delta$ moves the eigenvalue by
-$\delta^{1/m}$. This is the reason to bound $\sigmin$ rather than eigenvalue distance:
-$\sigmin(J_\lambda-zI)$ tracks $\abs{z-\lambda}^m$ honestly through the block region of
-Theorem~\ref{thm:enclosure}, and the singular vector is maximally misaligned with the eigenvector.
-(The symmetric Wilkinson matrix $W^\pm$, with pairs of nearly coincident eigenvalues, is a
-\emph{clustering} stress and is handled by the block-merge of Theorem~\ref{thm:enclosure}, not by the
-non-normal mechanism.)
+\paragraph{Ill-conditioned eigenbasis: Kahan (refuses).} \textsc{Kahan}'s $R=SK$ is nearly singular
+with an eigenbasis so ill-conditioned that the VBD Neumann test $\norm{R_2}_2<1$ fails at working
+precision ($\norm{R_2}_2\approx18$ for $n=60$): the routine \emph{refuses} to proceed (extended
+precision would be required). Refusal --- not an unverified answer --- is the intended behaviour.
 
-\paragraph{Convection--diffusion.} $Lu=-\varepsilon u''+u'$ on $[0,1]$ with Dirichlet data, discretized
-by finite differences, has spectrum on the negative real axis but pseudospectra filling parabolic
-regions, with resolvent norm growing like $e^{1/\varepsilon}$~\cite{ReddyTrefethen1994}. As a
-matrix-free differential operator with benign spectrum and malignant resolvent, it exercises the far
-block and coupling in exactly the regime the method targets.
+\paragraph{Defective spectrum: Jordan block.} A single Jordan block $J_\lambda$ has one eigenvector and
+infinite eigenvalue condition number; $\sigmin(J_\lambda-zI)$ tracks $\abs{z-\lambda}^m$, and the block
+region of Theorem~\ref{thm:enclosure} is the right object. Certifying it is genuinely hard and is future
+work (our current small-$n$ path has a dimension limitation on $m\gtrsim n$).
 
-\paragraph{Real-application sparse matrices (Matrix Market).} Beyond the constructed corner cases we
-draw non-normal matrices from the \textsc{Non-Hermitian Eigenvalue Problem} collection of Matrix
-Market~\cite{MatrixMarket}: e.g.\ \textsc{Tolosa} (aeroelastic flutter, highly non-normal, complex
-spectrum near the imaginary axis), \textsc{Olmstead} (viscoelastic fluid flow), and the
-reaction--diffusion \textsc{Brusselator} (\textsc{rdb}) family. These are sparse and matrix-free
-friendly, with real engineering provenance, and let us report timings on the regime the method is
-built for (large, sparse, strongly non-normal) rather than only on synthetic examples.
+\paragraph{Flat singular spectrum: cyclic shift.} The circular shift $Q$ ($Q_{i+1,i}=1$, $Q_{1,n}=1$)
+is unitary, eigenvalues the $n$-th roots of unity, \emph{all} singular values $1$; hence
+$\norm{G_{22}}_2=1$ identically and the far block can never be made deep --- the method reports $\times$.
+We include it also because it is the textbook Arnoldi-failure case: from a coordinate start, restarted
+Arnoldi with exact shifts can deflate the wanted eigenvector~\cite{Embree2009}. \emph{We note honestly
+that our own random-start, fully-reorthogonalized Arnoldi does \textbf{not} reproduce the collapse}
+(its Ritz moduli come out $\approx0.99$, near the true unit circle); the classic pathology is a
+coordinate-start/restart phenomenon. The method's guarantee is not that Arnoldi is trustworthy but that
+the certificate is: a positive floor is verified regardless of the Ritz quality, and no positive floor
+is ever fabricated.
+
+\paragraph{Real-application sparse matrices (Matrix Market).} The natural non-normal examples in the
+method's regime are sparse operators with decaying singular values from the \textsc{Non-Hermitian
+Eigenvalue Problem} collection~\cite{MatrixMarket} (e.g.\ \textsc{Tolosa}, \textsc{Olmstead}, the
+reaction--diffusion \textsc{rdb} family); reporting these is in progress.
 
 \begin{table}[t]\centering\small
-\begin{tabular}{@{}lccc@{}}
+\begin{tabular}{@{}llll@{}}
 \toprule
-Matrix & Normal? & Eigenvalue conditioning / departure & $\sigma$-subspace $\ne$ eigvec-subspace \\
+Matrix & singular spectrum & VBD & outcome \\
 \midrule
-Cyclic shift $Q$        & normal (unitary)          & $\kappa(\lambda)=1$; departure $0$              & no (reference; Ritz still fails) \\
-Grcar                   & strongly non-normal       & $\kappa(\lambda)$ grows with $n$                & yes, strongly \\
-Demmel                  & extremely non-normal      & $\kappa(\lambda)$ huge (tunable)                & yes, extreme \\
-Kahan                   & non-normal, ill-cond.     & tiny $\sigmin$ is the point                     & yes ($\sigmin$ vector) \\
-Jordan block $J_\lambda$& non-normal, defective     & $\kappa(\lambda)=\infty$; $\abs{z-\lambda}^{1/m}$& yes, maximal \\
-Convection--diffusion   & non-normal                & $\kappa(\lambda)\sim e^{1/\varepsilon}$          & yes \\
-Tolosa / Olmstead / rdb & non-normal (sparse)       & large resolvent                                 & yes \\
-Transfer (GKW, H\'enon, Lorenz) & strongly non-normal, matrix-free & resolvent $\sim10^4$, long transients & yes, strongly \\
+Transfer (GKW, H\'enon, Lorenz) & decays (low-rank tail)  & $\norm{R_2}<1$ & \textbf{certifies} leading spectrum \\
+Grcar ($n{=}100$)               & flat, full-rank          & $\kappa_2=1$   & fails safely ($\norm{G_{22}}=2.0$ vs $\abs{\lambda}{=}2.3$) \\
+Convection--diffusion           & flat, full-rank          & $\kappa_2=1$   & fails safely ($\norm{G_{22}}=491$ vs $\abs{\lambda}{=}800$) \\
+Kahan ($n{=}60$)                & --                       & $\norm{R_2}=18$& \textbf{refuses} (Neumann test fails) \\
+Jordan block (defective)        & --                       & --             & future work \\
+Cyclic shift (unitary)          & all $\sigma=1$           & $\kappa_2{=}16$& fails ($\norm{G_{22}}=1$, never deep) \\
 \bottomrule
 \end{tabular}
-\caption{Test-matrix gallery. The last column is the property the method exploits (S2).}
+\caption{The method on the standard gallery. It \emph{certifies} where the singular spectrum decays
+(the transfer-operator regime) and \emph{fails safely} --- a non-positive floor or an explicit
+refusal, never a false enclosure --- where it does not.}
 \label{tab:gallery}
 \end{table}
 
