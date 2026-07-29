@@ -261,13 +261,15 @@ _sigma_min_cert(M::AbstractMatrix) = _sigmin_lower(BallMatrix(Matrix(M)))
 # perturb each diagonal INDEPENDENTLY — a far bigger set than the common shift — and is much looser.)
 function _sigmin_circle(M::AbstractMatrix, center::Number, radius::Real;
         safety::Real = 0.5, ρfloor::Real = 0.02, maxpearls::Int = 4096)
-    smin = Inf; θ = 0.0; np = 0
-    while θ < 2π && np < maxpearls
-        z = ComplexF64(center) + radius * cis(θ)
+    T = eltype(M); R = real(T)                               # Float64 or BigFloat (svdbox precision)
+    c = T(center); rad = R(radius); saf = R(safety); ρf = R(ρfloor)
+    smin = R(Inf); θ = zero(R); np = 0; twoπ = 2 * R(π)
+    while θ < twoπ && np < maxpearls
+        z = c + rad * (cos(θ) + im * sin(θ))
         σz = _sigma_min_cert(M - z * I)                       # point svdbox (common shift, exact)
-        ρ = max(safety * max(σz, 0.0), ρfloor * radius)       # pearl radius from the local σ_min
+        ρ = max(saf * max(σz, zero(R)), ρf * rad)             # pearl radius from the local σ_min
         smin = min(smin, σz - ρ)                              # 1-Lipschitz cover of |w−z| ≤ ρ
-        θ += 2ρ / radius; np += 1
+        θ += 2ρ / rad; np += 1
     end
     return smin
 end
@@ -656,23 +658,32 @@ a **singular** deflation sized by the stopping rule `σ_singular < |λ_min good|
 block size chosen by the stopping rule.
 """
 function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig::Int = 40,
-        refine::Integer = 6, margin::Real = 0.8, fracs = (0.30, 0.20, 0.12),
-        kmax::Int = 256, reorth::Bool = true)
-    # 1. small eigenvalue block — the good block to enclose
+        Rcirc::Union{Nothing, Real} = nothing, far_frac::Real = 0.9, refine::Integer = 6,
+        margin::Real = 0.8, fracs = (0.30, 0.20, 0.12), prec::Type = Float64, ρfloor::Real = 0.004,
+        tighten::Bool = false, kmax::Int = 256, reorth::Bool = true)
+    # 1. eigenvalue block — the good block to enclose
     Hg, Vg, βN = _arnoldi(Amul, n, min(nblock_eig, n - 2))
     λg = eigvals(ComplexF64.(Hg)); ordg = sortperm(abs.(λg); rev = true)
     λ_min_good = abs(λg[ordg[min(neig, length(ordg))]])
-    # 2. singular block down to the eigenvalue scale (stopping rule σ < margin·|λ_g|)
-    U = _singular_block(Amul, Aadj, n, margin * λ_min_good; kmax = kmax)
+    # 2. singular block driven by the stopping scale: `Rcirc` FIXES a target circle and certifies
+    # ALL eigenvalues with |λ| > Rcirc (deflate until ‖G₂₂‖ < Rcirc/2); else the leading `neig`
+    # (deflate until σ < margin·|λ_g|). The former is the automatic "certify everything outside R".
+    thresh = Rcirc === nothing ? margin * λ_min_good : far_frac * Rcirc
+    U = _singular_block(Amul, Aadj, n, thresh; kmax = kmax)
     # 3. augmented captured frame Q = orth(V_g ∪ U); V_g orthonormal ⇒ clean project-and-drop
     Up = U .- Vg * (Vg' * U)
     keep = [j for j in axes(Up, 2) if norm(Up[:, j]) > 1e-8]
     Qf = Matrix(qr(hcat(Vg, Up[:, keep])).Q)[:, 1:(size(Vg, 2) + length(keep))]
-    # 4. faithful captured block G11 = Q*AQ + its VBD (Rump–Miyajima) — certified eigenvalues
+    # 4. faithful captured block G11 = Q*AQ + its VBD (Rump–Miyajima) — certified eigenvalues.
+    # The block entries come from Float64 matvecs; the VBD/candidates stay Float64, but the σ11
+    # svdbox may run in `prec` (BigFloat) — a targeted boost (`Hcp`) that certifies σ_min at scales
+    # below the Float64 floor without any BigFloat matvec (strongly non-normal, e.g. Lorenz).
     G11 = Qf' * _applycols(Amul, Qf)
     Hc = ComplexF64.(G11)
+    Hcp = prec == Float64 ? Hc : Complex{prec}.(G11)
     mr = _certify_block(Hc, refine)
     λ = mr.centres; ord = sortperm(abs.(λ); rev = true)
+    Winv = inv(mr.W)                                      # left eigenvectors (rows) — for κ(λᵢ)
     # 5. deep far block ‖G₂₂‖ and coupling γ — computed ONCE (z-independent)
     γ = _coupling_cert(Amul, Aadj, Qf)
     Pq(x) = x .- Qf * (Qf' * x)
@@ -682,9 +693,12 @@ function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig
     θmaxg = length(Lg.α) <= 1 ? (isempty(Lg.α) ? 0.0 : Lg.α[1]) :
             maximum(eigvals(SymTridiagonal(Float64.(Lg.α), Float64.(Lg.β[1:(end - 1)]))))
     G22n = R2g < 1 ? sqrt(max(0.0, θmaxg + R1g / (1 - R2g))) : Inf
-    # 6. per leading eigenvalue: adaptive-radius isolation
+    # 6. per target eigenvalue: adaptive-radius isolation. Targets = the leading `neig`, or (when
+    # `Rcirc` is set) EVERY certified block eigenvalue with |λ| > Rcirc — the automatic outside-R set.
+    targets = Rcirc === nothing ? ord[1:min(neig, length(ord))] :
+              [i for i in ord if abs(λ[i]) > Rcirc]
     results = NamedTuple[]
-    for i in ord[1:min(neig, length(ord))]
+    for i in targets
         c = λ[i]
         gap = minimum((abs(c - λ[j]) for j in eachindex(λ) if j != i); init = 2 * maximum(abs, λ))
         best = (; floor = -Inf, radius = 0.0, σ11 = 0.0, σ22 = 0.0)
@@ -692,19 +706,39 @@ function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig
             r = fr * gap
             # σ11 certified over the WHOLE circle by the pearl cover (no arc-cover needed); σ22 from
             # the exact circle-minimum |z| (analytic) minus the z-independent deep ‖G₂₂‖.
-            σ11 = _sigmin_circle(Hc, c, r)
+            σ11 = Float64(_sigmin_circle(Hcp, c, r; ρfloor = ρfloor))  # svdbox in `prec`, Float64 out
             minz = abs(c) - r                                 # min |z| on the circle around c
             σ22 = G22n < minz ? minz - G22n : 0.0
             fl = _assemble(σ11, σ22, γ)
             fl > best.floor && (best = (; floor = fl, radius = r, σ11, σ22))
         end
+        # Enclosure of A's eigenvalue. FAST default (`tighten=false`): the Bauer–Fike estimate
+        # `κ(λᵢ)·‖lifted Ritz residual‖` — κ from the frame (one inv), the residual of the lifted
+        # eigenvector `Q·W[:,i]` against A (one matvec). Cheap and tight; unlike the M-R disc, which
+        # blows up for the big ill-conditioned augmented block. RIGOROUS opt-in (`tighten=true`): the
+        # SMALLEST radius still certifying floor>0 (bisect) — `σ_min(A−zI)>0` + count 1 ⇒ A's
+        # eigenvalue lies inside it. The bisection is 14 pearl-covers/eigenvalue, hence off by default.
+        κi = norm(@view mr.W[:, i]) * norm(@view Winv[i, :])
+        qi = Qf * mr.W[:, i]; qi ./= norm(qi)
+        renc = κi * norm(ComplexF64.(Amul(qi)) .- λ[i] .* qi)         # Bauer–Fike (heuristic)
+        if tighten && best.floor > 0 && R2g < 1
+            rlo, rhi = 0.0, best.radius
+            for _ in 1:14
+                rm = (rlo + rhi) / 2
+                σ11 = Float64(_sigmin_circle(Hcp, c, rm; ρfloor = ρfloor))
+                minz = abs(c) - rm; σ22 = G22n < minz ? minz - G22n : 0.0
+                _assemble(σ11, σ22, γ) > 0 ? (rhi = rm) : (rlo = rm)
+            end
+            renc = rhi
+        end
         push!(results, (; λ = c, disc = mr.radii[i], cluster = 1,
-            cert = (; floor = best.floor, radius = best.radius, center = ComplexF64(c),
-                σ11min = best.σ11, σ22min = best.σ22, γ = γ, G22norm = G22n,
+            cert = (; floor = best.floor, radius = best.radius, enclosure = renc,
+                center = ComplexF64(c), σ11min = best.σ11, σ22min = best.σ22, γ = γ, G22norm = G22n,
                 certified = best.floor > 0 && R2g < 1)))
     end
     return (; mr, βN, results, V = Vg, U, Q = Qf, G11 = Hc, λ_min_good, G22norm = G22n, γ,
-        R2g, nsing = length(keep), dimQ = size(Qf, 2), Hritz = λ[ord])
+        R2g, Rcirc, far_deep = (Rcirc === nothing || G22n < Rcirc),
+        nsing = length(keep), dimQ = size(Qf, 2), Hritz = λ[ord])
 end
 
 """
