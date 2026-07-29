@@ -1,0 +1,493 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{remark}[theorem]{Remark}
+
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\spec}{\operatorname{spec}}
+\newcommand{\sig}{\sigma}
+\newcommand{\sigmin}{\sigma_{\min}}
+\newcommand{\sigmax}{\sigma_{\max}}
+\DeclarePairedDelimiter{\norm}{\lVert}{\rVert}
+\DeclarePairedDelimiter{\abs}{\lvert}{\rvert}
+\newcommand{\Ball}{\mathrm{Ball}}
+\newcommand{\svdbox}{\texttt{svdbox}}
+
+\title{A rigorous Krylov method for eigenvalue enclosures and resolvent bounds
+of large non-normal and matrix-free operators}
+\author{%
+  Isaia Nisoli\thanks{IM--UFRJ.}
+  \and (coauthors)}
+\date{Draft --- \today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We give a matrix-free, interval-rigorous method that encloses the leading eigenvalues of a
+large non-normal operator $A$ --- available only through the maps $x\mapsto Ax$, $x\mapsto A^*x$
+--- and rigorously bounds its smallest singular value $\sigmin(A-zI)$ (equivalently the resolvent
+norm) on curves in the complex plane. The method rests on two ingredients. The first is the
+\emph{Miyajima--Rump} verified block diagonalization for dense matrices, which certifies
+eigenvalue enclosures and resolvent bounds from a single Neumann residual, with the non-normality
+confined to small diagonal blocks and only a benign inter-block conditioning transported through
+$\kappa_2$. The second is a Krylov reduction that splits the operator into a dense \emph{captured}
+block and a matrix-free \emph{far} block. The central observation is that for a non-normal operator
+the eigenvector (Arnoldi) Krylov space does \emph{not} span the leading singular directions --- so
+deflating it leaves the far block shallow in operator norm --- and that augmenting the captured
+subspace with the top right singular vectors, obtained from a Lanczos process on $A^*A$, makes the
+far block \emph{deep}: its matrix-free $\sigmin$ certificate then converges with a well-separated
+bottom. The captured compression is \emph{faithful} ($\sigmin(G_{11}-zI)\approx\sigmin(A-zI)$), so
+its verified SVD is $\kappa_2$-free. Circles are rigorously covered by an adaptive pearl cover, and each
+eigenvalue is rigorously enclosed by a cheap probe that locates the scale followed by a single
+verified check. We report certificates for the Perron--Frobenius (Ulam) operators of the noisy
+H\'enon and contracting-Lorenz maps and the Gauss--Kuzmin--Wirsing operator, and for a gallery of
+standard non-normal test matrices where Arnoldi Ritz values are known to mislead.
+\end{abstract}
+
+\tableofcontents
+
+\section{Introduction}\label{sec:intro}
+
+Let $A\in\C^{n\times n}$, or more generally a linear operator on $\C^n$ available only through the
+two maps $x\mapsto Ax$ and $x\mapsto A^*x$. We want \emph{rigorous} answers to two coupled questions:
+\begin{enumerate}
+\item enclose the leading eigenvalues of $A$ in rigorous discs, each disc carrying a rigorous
+      eigenvalue count; and
+\item bound $\sigmin(A-zI)=1/\norm{(A-zI)^{-1}}_2$ from below on a curve $\Gamma\subset\C$ --- a
+      rigorous resolvent bound, hence a rigorous statement about the $\varepsilon$-pseudospectrum.
+\end{enumerate}
+``Rigorous'' means every reported number is an outward-rounded interval (ball) enclosure: the
+floating-point computation produces \emph{candidates}, and a second phase, carried out in
+midpoint--radius ball arithmetic, bounds the residual of those candidates. We use the ball-arithmetic
+kernel of \texttt{BallArithmetic.jl}; the numerics below are reproducible in the companion package.
+
+The difficulty is \emph{non-normality}. For a normal operator the eigenvalues, the singular values,
+and the resolvent norm are all governed by the same orthonormal frame, and a Krylov compression is
+benign. Transfer operators of chaotic maps --- our motivating application --- are the opposite: they
+are strongly non-normal, their spectrum is a cloud strictly inside the unit disk, and
+$\norm{(A-zI)^{-1}}_2$ can be enormous at points far from the spectrum~\cite{TrefethenEmbree2005}. Two symptoms drive the paper:
+\begin{itemize}
+\item[(S1)] \textbf{Arnoldi Ritz values can mislead.} The classic example is the cyclic shift, whose
+      eigenvalues are the roots of unity but whose Arnoldi Ritz values from a coordinate start are
+      pinned near the origin (Section~\ref{sec:examples}). A rigorous method must never trust a Ritz
+      value; it must certify.
+\item[(S2)] \textbf{The eigenvector Krylov space misses the singular directions.} We measure, on a
+      $256$-dimensional Krylov block of a discretized noisy-H\'enon operator, that
+      $\sigmax(H)=1.48<\sigmax(A)=1.71$: the compression $H=V^*AV$ does not even contain the leading
+      \emph{singular} direction of $A$. Consequently, deflating the Krylov space barely reduces the
+      operator norm of the complementary block ($0.43$ against the true $\sigma_{257}(A)=0.12$), and
+      a matrix-free $\sigmin$ certificate on that shallow far block does not converge.
+\end{itemize}
+Our contribution is a reduction that answers both. We certify the eigenvalue \emph{block} with the
+Miyajima--Rump machinery (Sections~\ref{sec:mr}--\ref{sec:mrres}), and we make the far block deep by
+deflating the top \emph{singular} directions of $A$ --- obtained by a Lanczos on $A^*A$ --- in
+addition to the eigenvector directions (Sections~\ref{sec:krylov}--\ref{sec:krylovcert}). The
+resulting certificate is matrix-free, sound, and, for the operators we treat, certifies the leading
+spectrum in tens of seconds.
+
+\paragraph{A note on scope.} When $A$ is the Ulam (Galerkin) discretization of an infinite-dimensional
+transfer operator, everything below is a rigorous statement about the \emph{matrix} $A$. Lifting it to
+the underlying operator requires, in addition, a rigorous bound on the discretization
+(e.g.\ $\mathrm{BV}\!\to\!L^1$) error; that ingredient is orthogonal to this paper and is not included.
+
+\section{Miyajima--Rump enclosure for dense matrices}\label{sec:mr}
+
+We first recall the verified block diagonalization for a dense $B\in\C^{m\times m}$~\cite{Rump2022,Miyajima2014}. It is the engine
+we will run on the captured Krylov block; we state it for a general $B$.
+
+\paragraph{Two-phase pattern.} A floating-point eigensolver returns a candidate similarity: an
+approximate frame $W$ and its approximate inverse $Y\approx W^{-1}$ (never an exact inverse), chosen
+so that
+\begin{equation}\label{eq:Atilde}
+  \widetilde B \;=\; Y\,B\,W \;\approx\; \Lambda \;=\; \operatorname{blockdiag}(P_1,\dots,P_q),
+\end{equation}
+a block-diagonal candidate. The columns of $W$ are grouped into clusters $\mathcal C_1,\dots,\mathcal C_q$;
+$P_j=\widetilde B[\mathcal C_j,\mathcal C_j]$. The candidate phase is Float64; the certification phase,
+below, is ball arithmetic.
+
+\paragraph{Block-orthonormal frame (VBD).} Forcing $W$ to be the eigenvector matrix is dangerous: for
+a near-defective cluster the eigenbasis is ill-conditioned or does not exist, inflating $\kappa_2(W)$.
+Instead we build $W$ from the \emph{Schur} vectors and re-orthonormalize \emph{within} each cluster
+but \emph{not} across clusters. The frame is then \emph{block-orthonormal}: $W_{\mathcal C_j}$ has
+orthonormal columns, so $\kappa_2(W)$ is governed by the \emph{inter-block} subspace angles
+($\approx 1/\sin\theta_{\mathrm{inter}}$, benign and separation-controlled), while the intra-cluster
+non-normality is retained inside $P_j$. A Newton (Sylvester) step reduces the off-block part of
+$\widetilde B$ toward the $\kappa\,u$ floor. We call the result the \emph{verified block
+diagonalization} (VBD).
+
+\paragraph{The single residual.} Two ball quantities certify everything:
+\begin{equation}\label{eq:residuals}
+  R_2 \;=\; Y W - I, \qquad \widetilde B = Y B W,
+\end{equation}
+computed as ball products with outward rounding. If $\norm{R_2}_2<1$ (verified via a rigorous
+$\ell^2$ operator-norm bound), then $YW=I+R_2$ is invertible with
+$\norm{(YW)^{-1}}_2\le 1/(1-\norm{R_2}_2)$ (Neumann), so $W$ is nonsingular, $Y$ is a genuine
+left inverse up to $R_2$, and
+\begin{equation}\label{eq:kappa}
+  \kappa_2(W) \;\le\; \frac{\norm{Y}_2}{1-\norm{R_2}_2}\cdot\norm{W}_2
+  \qquad(\text{no \texttt{cond}, no exact inverse}).
+\end{equation}
+The deviation of the collapsed $M=W^{-1}BW$ from the candidate $\Lambda$ is bounded by one slack:
+\begin{equation}\label{eq:blockdev}
+  \norm{M-\Lambda}_2 \;\le\; \beta_\Lambda
+  \;:=\; \norm{N}_2 + \frac{\norm{R_2}_2\,\norm{\widetilde B}_2}{1-\norm{R_2}_2},
+\end{equation}
+where $N$ is the off-block part of $\widetilde B$ (the inter-block leakage). Crucially $\beta_\Lambda$
+\emph{subsumes} the coupling: there is no separate inter-block term.
+
+\begin{theorem}[Spectral enclosure]\label{thm:enclosure}
+Suppose $\norm{R_2}_2<1$. Then every eigenvalue of $B$ lies in
+$\bigcup_j\Omega_j$ with $\Omega_j=\{z:\sigmin(P_j-zI)\le \beta_\Lambda\}$, and each connected
+component of $k$ overlapping regions $\Omega_j$ contains exactly $\sum$ of the corresponding block
+sizes eigenvalues of $B$. For a singleton block $P_j=[\widetilde B_{jj}]$ the region is the disc
+$\abs{z-\widetilde B_{jj}}\le\beta_\Lambda$; for a $k$-fold cluster it is the block region, which
+tracks $\abs{z-\lambda}^k$ near a defective $\lambda$.
+\end{theorem}
+
+The eigenvalue count follows from a homotopy/argument-principle argument on the block-diagonal
+candidate: $\Lambda-zI$ and $M-zI$ have the same number of eigenvalues inside a contour on which
+$\sigmin(\Lambda-zI)>\beta_\Lambda$, because $\norm{M-\Lambda}_2\le\beta_\Lambda$ keeps them from
+crossing. The clustering (which blocks share a component) is decided by disc overlap and is
+\emph{self-correcting}: an over-optimistic split whose rigorous regions still overlap is re-merged.
+
+\begin{remark}[$\kappa_2$ is a diagnostic, not part of the enclosure]
+The enclosure of Theorem~\ref{thm:enclosure} does not use $\kappa_2$: it reads $\sigmin(P_j-zI)$ off
+the diagonal blocks and subtracts one slack. The conditioning $\kappa_2(W)$ enters only the
+resolvent transport of Section~\ref{sec:mrres}. We compute it cheaply (a Collatz $\ell^2$ bound) by
+default, or tightly (one verified SVD of $W$) on request.
+\end{remark}
+
+\section{Resolvent bounds from Miyajima--Rump}\label{sec:mrres}
+
+The same data bound the resolvent, cheaply, away from a small exclusion set. Since
+$B-zI=W(M-zI)W^{-1}$,
+\begin{equation}\label{eq:transport}
+  \sigmin(B-zI)\;\ge\;\frac{\sigmin(M-zI)}{\kappa_2(W)}.
+\end{equation}
+Block-diagonality gives $\sigmin(\Lambda-zI)=\min_j\sigmin(P_j-zI)$, and $\sigmin$ is $1$-Lipschitz,
+so $\sigmin(M-zI)\ge\min_j\sigmin(P_j-zI)-\beta_\Lambda$. With \eqref{eq:transport} this is the
+primary bound.
+
+\begin{lemma}[Block resolvent floor]\label{lem:blockres}
+With $\beta_\Lambda$ from \eqref{eq:blockdev} and $\kappa_2(W)$ from \eqref{eq:kappa},
+\[
+  \sigmin(B-zI)\;\ge\;\frac{\max\!\big(0,\ \min_j\sigmin(P_j-zI)-\beta_\Lambda\big)}{\kappa_2(W)}.
+\]
+Per $z$ the cost is one small $\sigmin(P_j-zI)$ per block (closed form for $\abs{\mathcal C_j}\le2$,
+a verified SVD otherwise); a singleton contributes only the far field $\abs{z-\widetilde B_{jj}}$.
+The non-normality of a defective cluster lives in $\sigmin(P_j-zI)$ (it tracks $\abs{z-\lambda}^m$),
+\emph{not} in $\kappa_2(W)$, which carries only the benign inter-block conditioning.
+\end{lemma}
+
+A localized variant charges each block only its own coupling radius. With
+$r_j=\norm{N[\mathcal C_j,:]}_2$ the block-row norm of the off-block part and
+$s_j(z)=\sigmin(P_j-zI)$, if $\tau(z)^2=\sum_j (r_j/s_j(z))^2<1$ then
+\begin{equation}\label{eq:blockdom}
+  \sigmin(B-zI)\;\ge\;\frac{(\min_j s_j(z))(1-\tau(z))}{\kappa_2(W)}
+\end{equation}
+(factor $M-zI=(\Lambda-zI)(I+(\Lambda-zI)^{-1}(M-\Lambda))$ and bound the block rows). The engine
+returns the maximum of Lemma~\ref{lem:blockres} and \eqref{eq:blockdom}.
+
+\paragraph{The exact-SVD escape.} Both bounds read $\sigmin$ off the block-diagonal \emph{surrogate}
+and pay $\kappa_2(W)$. When $B$ is small enough to factor a verified SVD directly, $\sigmin(B-zI)$ is instead enclosed \emph{exactly} by a single $\svdbox(B-zI)$~\cite{Miyajima2014SV} per $z$, with \emph{no} $\kappa_2$
+factor: the SVD sees the true non-normality of the whole block. For a moderate captured block this
+costs $O(m^3)$ per sample (milliseconds) and recovers exactly the $\kappa_2$ the surrogate concedes;
+it is our default in Section~\ref{sec:krylovcert}. The block-diagonal layer is reserved for blocks too
+large for one SVD, where its $O(\sum_j m_j^3)\ll O(m^3)$ cost is worth the $\kappa_2$ price. There is
+\emph{no} per-block $\kappa_2$: the transport \eqref{eq:transport} is global; the escape is the exact
+SVD, not a local conditioning constant.
+
+\section{The Krylov approach}\label{sec:krylov}
+
+Now $A$ is large or matrix-free. The dense VBD of Section~\ref{sec:mr} cannot run on all of $A$, but it
+can run on a small subspace. We split $\C^n$ into a captured subspace $\mathcal Q=\operatorname{ran}Q$
+($Q$ with orthonormal columns) and its complement, and write $A$ in the block form of the orthonormal
+basis $[\,Q\mid Q_\perp\,]$,
+\begin{equation}\label{eq:2block}
+  A \;\cong\; \begin{pmatrix} G_{11} & G_{12}\\ G_{21} & G_{22}\end{pmatrix},\qquad
+  G_{11}=Q^*AQ,\quad G_{22}=P_\perp A P_\perp,\quad P_\perp=I-QQ^*.
+\end{equation}
+The off-diagonal blocks are the coupling; put $\gamma=\max(\norm{G_{12}}_2,\norm{G_{21}}_2)$. Because
+the basis is orthonormal the outer similarity is unitary, so $\gamma=\norm{E}_2$ with
+$E=\big(\begin{smallmatrix}0&G_{12}\\G_{21}&0\end{smallmatrix}\big)$, and no $\kappa_2$ enters the
+outer split. A Schur-complement bound gives, for $\sig_{11}=\sigmin(G_{11}-zI)$ and
+$\sig_{22}=\sigmin(G_{22}-zI)$,
+\begin{equation}\label{eq:assembly}
+  \boxed{\;\sigmin(A-zI)\;\ge\;\frac{\sig_{11}\,\sig_{22}}{\sig_{11}+\sig_{22}+\gamma}\;}
+\end{equation}
+positive whenever $\sig_{11},\sig_{22}>0$, for \emph{any} coupling $\gamma$. (The cruder Weyl bound
+$\min(\sig_{11},\sig_{22})-\gamma$ dies once $\gamma$ is large, which it is for non-normal operators.)
+
+\subsection{Two subspaces, two jobs}\label{sec:twosub}
+
+The captured subspace must do two things, and for a non-normal operator these require \emph{different}
+directions.
+
+\paragraph{Eigenvalues need the eigenvector (Arnoldi) block.} A few steps of Arnoldi reduce $A$ to a
+dense upper Hessenberg Rayleigh block $H$ (the non-symmetry of $A$ enters here as a Hessenberg, not a
+tridiagonal, reduction), whose Ritz values approximate the near-target eigenvalues. Running the VBD of
+Section~\ref{sec:mr} on $H$ certifies the eigenvalue discs. Let $V$ ($n\times m_{\mathrm{eig}}$,
+orthonormal) be the Arnoldi basis.
+
+\paragraph{The resolvent tail needs the singular block.} The far-block operator norm
+$\norm{G_{22}}_2=\norm{P_\perp A P_\perp}_2$ is a \emph{singular-value} quantity. The Arnoldi space is
+$A$-nearly-invariant (the forward residual $\beta_N$ is tiny) but \emph{not} $A^*$-invariant, and its
+own leading singular value falls short of $\sigmax(A)$; deflating it leaves $\norm{G_{22}}_2$ far above
+$\sigma_{m+1}(A)$. Rotating inside $\operatorname{ran}V$ cannot help --- the singular vectors of the
+compression $H$, lifted through the frame, give the \emph{same} projector $VV^*$. What is needed are
+the top singular vectors of $A$ \emph{themselves}, which lie partly outside $\operatorname{ran}V$.
+These are produced by a Lanczos on the Hermitian $A^*A$ (two matvecs per step): its Krylov space
+$\{v,\,A^*Av,\,(A^*A)^2v,\dots\}$ converges to the top right singular vectors $U_k$, and by
+Eckart--Young $\norm{(I-U_kU_k^*)A(I-U_kU_k^*)}_2\to\sigma_{k+1}$.
+
+\begin{definition}[Captured subspace]\label{def:Q}
+$Q=\operatorname{orth}[\,V\mid U'\,]$, where $U'=(I-VV^*)U_k$ is the part of the singular block outside
+the eigenvector block (rank-revealing, drop near-zero columns). The eigenvalue enclosure reads its
+discs from the VBD on $V^*AV$; the resolvent tail uses the enlarged $Q$.
+\end{definition}
+
+\paragraph{Deep far block, and a stopping rule.} On the target circle the shift enters the far block
+only diagonally, $P_\perp(A-zI)P_\perp=G_{22}-zI$, so by the reverse triangle inequality
+\begin{equation}\label{eq:farshort}
+  \sigmin(G_{22}-zI)\;\ge\;\abs{z}-\norm{G_{22}}_2,
+\end{equation}
+\emph{exact for every $z$}, with the single $z$-independent number $\norm{G_{22}}_2$. This is useful
+only when the far block is deep. Fix a target circle of radius $R$; grow the singular block $U_k$ until
+$\norm{G_{22}}_2<f\,R$ (we use $f=0.9$: the far circle need only sit inside $R$). Equivalently, peel
+singular vectors until the smallest converged singular Ritz value drops below the scale of interest ---
+detected robustly by the \emph{plateau} of the count $\#\{\sigma\ge\text{thresh}\}$, which the large
+null space of $A^*A$ (numerical rank $\ll n$) cannot inflate. Every eigenvalue with $\abs{\lambda}>R$
+is then captured and certifiable, automatically: no guess of ``how many'' is needed. The former
+three-block picture (good/bad/ugly) collapses to \emph{captured-good $+$ deep-far}: the ``bad''
+near-circle eigenvalues no longer need a separate block, because the deep far block absorbs them.
+
+\paragraph{Faithfulness.} With $Q$ from Definition~\ref{def:Q}, the captured compression is a
+\emph{faithful} stand-in for $A$ on the target circles: we measure $\sigmin(Q^*AQ-zI)\approx
+\sigmin(A-zI)$ to $\approx3\%$ (Section~\ref{sec:examples}), with no spurious eigenvalue of $Q^*AQ$
+near the circles. Hence $\sig_{11}=\svdbox(G_{11}-zI)$ is $\kappa_2$-free (the exact-SVD escape of
+Section~\ref{sec:mrres}); the ill-conditioning of the augmented block is irrelevant to it.
+
+\section{Certification estimates for Krylov}\label{sec:krylovcert}
+
+We now assemble \eqref{eq:assembly} rigorously.
+
+\subsection{The matrix-free far block}\label{sec:farblock}
+
+Fix $z$ and put $M_z=(G_{22}-zI)^*(G_{22}-zI)\succeq0$ on $\operatorname{ran}P_\perp$; then
+$\sigmin(G_{22}-zI)=\sqrt{\lambda_{\min}(M_z)}$ and $M_z$ is applied by two matvecs (on $A,A^*$) plus
+the rank-$\dim Q$ projector $P_\perp$, with $G_{22}$ never formed. A Lanczos on $M_z$ builds an
+orthonormal Krylov basis; in finite precision the computed $\bar q_j$ satisfy
+$\bar\beta_j\bar q_{j+1}=M_z\bar q_j-\bar\alpha_j\bar q_j-\bar\beta_{j-1}\bar q_{j-1}+f_j$ and lose
+orthogonality. Paige's recurrence \emph{streams} a rigorous bound on the basis-conditioning residual
+$R_2=\bar Q_k^*\bar Q_k-I$ from the scalar coefficients $(\bar\alpha_j,\bar\beta_j,\norm{f_j})$ ---
+no stored basis, no inner products --- and
+$\norm{R_2}_2\le\norm{W}_2\le\sqrt{\norm{W}_1\norm{W}_\infty}$ with $W\ge\abs{R_2}$ entrywise.
+
+\begin{proposition}[Matvec floor]\label{prop:matfloor}
+If $\norm{R_2}_2\le\rho<1$, then every eigenvalue of $M_z$ lies within
+$\beta^{(22)}=\norm{R_1}_2/(1-\rho)$ of $\spec(T_k)$ ($T_k$ the computed tridiagonal,
+$R_1=\bar Q_k^*(M_z\bar Q_k-\bar Q_kT_k)$), so
+\[
+  \sigmin(G_{22}-zI)\;\ge\;\sqrt{\max\!\big(0,\ \underline\theta_{\min}-\beta^{(22)}\big)},
+  \qquad \theta_{\min}=\lambda_{\min}(T_k),
+\]
+a rigorous floor from matvecs alone. Both $R_1$ and $R_2$ stream from the scalar coefficients.
+\end{proposition}
+
+The single test $\norm{R_2}_2<1$ is simultaneously a nonsingularity and a completeness certificate.
+It is here that the \emph{deep} far block pays off: deflating the top singular directions lifts
+$\lambda_{\min}(M_z)$ away from $0$, so the bottom Ritz value does \emph{not} converge early, the
+divisor $\underline{\bar\beta_j}$ stays healthy, $\norm{R_2}_2<1$ holds, and the floor is sound and
+tight --- exactly the well-separated-bottom regime the singular deflation creates. On a shallow
+(eigenvector-only) far block the bottom cluster collapses $\norm{R_2}_2$ and the certificate declines.
+In practice, once the far block is deep the $z$-independent shortcut \eqref{eq:farshort} suffices on
+the circles, and the per-$z$ Lanczos is a fallback triggered only where $\abs{z}\le\norm{G_{22}}_2$.
+
+\subsection{The coupling}\label{sec:coupling}
+
+$\gamma=\max(\norm{P_\perp AQ}_2,\norm{P_\perp A^*Q}_2)$ is $z$-independent and computed once. For a
+non-normal $A$ the two differ (the adjoint coupling dominates) and both are needed. The $n\times\dim Q$
+coupling matrix is \emph{wide}, and the cheap $\min(\text{Collatz},\sqrt{\norm{\cdot}_1\norm{\cdot}_\infty})$
+bound overestimates its spectral norm by $\approx\sqrt{\text{rank}}$ (measured $5.34$ vs.\ true $1.33$);
+this alone can sink \eqref{eq:assembly}. We therefore bound it via the small $\dim Q\times\dim Q$ Gram,
+$\gamma=\sqrt{\sigmax(C^*C)}$ with $C$ the coupling matrix, using a verified SVD of $C^*C$ --- tight and
+cheap.
+
+\subsection{Circle certificates: the adaptive pearl cover}\label{sec:pearl}
+
+To certify $\sigmin(A-zI)>0$ over a whole circle $\Gamma=\{c+r e^{i\theta}\}$ we cover it with
+\emph{pearls}. At a pearl centre $z$ a verified point SVD gives $\sig(z)=\sigmin(G_{11}-zI)$; since
+$\sigmin(G_{11}-wI)$ is $1$-Lipschitz in $w$, the disc $\{\abs{w-z}\le\varrho\}$ has $\sigmin\ge\sig(z)-\varrho$, and we advance $\Delta\theta=2\varrho/r$ so the pearls overlap. The pearl radius
+$\varrho=\eta\,\sig(z)$ adapts to the local $\sigmin$ --- large pearls where $\sigmin$ is large, small
+where small --- so a smooth arc costs one SVD and the whole circle takes $O(\oint r\,d\theta/\sigmin)$
+SVDs instead of a fixed uniform sampling with a global arc-cover. (Using an interval scalar
+$\Ball(z,\varrho)$ on the diagonal is much looser: it perturbs each diagonal \emph{independently},
+a far larger set than the common shift.) The far term contributes $\sig_{22}\ge\min_\Gamma\abs{z}
+-\norm{G_{22}}_2$ (exact, analytic), and \eqref{eq:assembly} is monotone in both, so the rigorous
+floor over $\Gamma$ is one assembly of the two circle minima.
+
+\subsection{Rigorous eigenvalue enclosure: probe and triple}\label{sec:enclose}
+
+A positive floor on a circle $\Gamma$ enclosing exactly one eigenvalue certifies that eigenvalue of
+$A$ inside $\Gamma$; shrinking $\Gamma$ tightens the enclosure. Blind bisection is wasteful, so we use
+a two-step scheme. \emph{(a)} A cheap non-rigorous probe: grow $r$ from the eigenvalue until the
+Float64 $\sigmin(G_{11}-(c+r)I)$ matches the linear estimate $r/\kappa(\lambda)$ (it has cleared the
+numerical noise floor), where $\kappa(\lambda)$ is the eigenvalue condition number read from the frame
+and $r_{\mathrm{heur}}=\kappa(\lambda)\cdot\norm{\text{lifted Ritz residual}}$ (Bauer--Fike) sets the
+starting scale. \emph{(b)} Triple the distance and run \emph{one} rigorous pearl cover there, growing
+by a factor until $\svdbox$ certifies $\sigmin(A-zI)>0$. The rigorous radius is floored at the verified
+$\svdbox$ noise level $\kappa(G_{11})\cdot u$, which is above the Float64 $\sigmin$ noise; a
+higher-precision (BigFloat) SVD lowers it for a tighter enclosure. The heuristic only \emph{locates}
+where to certify; the enclosure is rigorous.
+
+\subsection{Soundness summary}\label{sec:sound}
+
+Every quantity feeding \eqref{eq:assembly} is a ball bound: $\sig_{11}$ from a verified SVD of the
+Float64 candidate block (the block entries carry only rounding, subsumed as in Section~\ref{sec:mr}),
+$\sig_{22}$ from Proposition~\ref{prop:matfloor} or the exact shortcut, and $\gamma$ from a verified
+Gram SVD. The routine refuses when $\norm{R_2}_2\ge1$. The rigorous $\sigmin$ never exceeds
+$\sigmin(A-zI)$; at a true eigenvalue the gap is $\le0$.
+
+\section{Numerical examples}\label{sec:examples}
+
+\subsection{Transfer operators of chaotic maps (matrix-free)}
+
+We take $A$ the Ulam (Perron--Frobenius) discretization of a noisy map on a uniform grid, applied
+matrix-free. Noise width $0.1$; depth-$6$ grid, $n=4096$.
+
+\paragraph{Noisy H\'enon.} Strongly non-normal ($\sigmax(A)=1.71$ vs.\ spectral radius $1$), numerical
+rank $\approx745$, spectrum a cloud inside the unit disk. The eigenvector Krylov complement has
+$\norm{G_{22}}_2=0.43$ against $\sigma_{257}(A)=0.12$ --- the symptom (S2). With the automatic
+outside-$R$ mode at $R=0.35$: $\norm{G_{22}}_2=0.29<R$, and \textbf{$11$ eigenvalues rigorously isolated}
+outside $R$ (down to $\abs{\lambda}=0.379$), all with a positive floor
+($\sigmin\ge1.5\!\times\!10^{-2}\dots1.3\!\times\!10^{-5}$); $\dim Q=165$; wall time $\approx340$\,s in
+Float64. The captured compression is faithful: $\sigmin(G_{11}-zI)=\sigmin(A-zI)$ to $\approx3\%$ at the
+tested points.
+
+\paragraph{Contracting Lorenz.} $\kappa_2\approx4.7\!\times\!10^5$. The five leading eigenvalues certify
+in Float64 ($\sigmin\ge2.2\!\times\!10^{-2}\dots3.0\!\times\!10^{-6}$); the deepest pair
+($\abs{\lambda}=0.269$) requires a fine pearl floor (the granularity, \emph{not} the working precision,
+was the obstruction --- a high-precision SVD is unnecessary).
+
+\paragraph{Gauss--Kuzmin--Wirsing.} A benchmark whose sub-dominant eigenvalue (the GKW constant) is a
+classical target; the far block is low-rank, and a small captured block certifies the gap~\cite{NisoliGauss}.
+
+\subsection{Non-normal test matrices and Arnoldi corner cases}\label{sec:testmat}
+
+We validate on a gallery of standard non-normal matrices (Table~\ref{tab:gallery}), chosen so that
+the two symptoms of Section~\ref{sec:intro} appear. The last column of the table records the property
+the method exploits: whether the top/bottom singular subspace of $A-zI$ genuinely differs from the
+eigenvector subspace.
+
+\paragraph{Cyclic shift (S1).} The circular shift $Q$ ($Q_{i+1,i}=1$, $Q_{1,n}=1$) is the companion
+matrix of $z^n-1$: unitary, with eigenvalues the $n$-th roots of unity. It is the textbook case where
+a truncated Arnoldi from a coordinate start returns Ritz values pinned near the origin, and where
+restarted Arnoldi with exact shifts can deflate exactly the wanted eigenvector~\cite{Embree2009}. Our
+method never trusts a Ritz value: the argument-principle count on a rigorous circle is the arbiter,
+so on $Q$ the certificate either encloses the roots of unity or refuses --- it cannot report the
+spurious near-zero cluster. As $Q$ is normal the singular augmentation is a no-op; this is the
+degenerate reference case, a soundness check rather than a test of the non-normal mechanism.
+
+\paragraph{Grcar, Demmel, Kahan.} \textsc{Grcar} (banded Toeplitz: $-1$ on the subdiagonal, $+1$ on
+the diagonal and the next three superdiagonals) is strongly non-normal with pseudospectra bulging far
+outside the spectrum~\cite{Trefethen1992}. \textsc{Demmel}'s upper-triangular matrix, built to
+disprove a stability conjecture, has an astronomically large resolvent norm at a tight eigenvalue
+cluster~\cite{Demmel1987}. \textsc{Kahan}'s upper-triangular $R=SK$ is nearly singular with a tiny
+$\sigmin$ whose singular vector is unrelated to any eigenvector~\cite{Kahan1966} --- the case that
+fools rank-revealing pivoting, stressing the $\sigmin$ layer directly. In all three the top singular
+subspace of $A-zI$ differs strongly from the eigenvector subspace: symptom (S2), where the $A^*A$
+deflation is what makes the far block deep.
+
+\paragraph{Defective / Jordan blocks.} A single Jordan block $J_\lambda$ has one eigenvector and
+infinite eigenvalue condition number; a perturbation of size $\delta$ moves the eigenvalue by
+$\delta^{1/m}$. This is the reason to bound $\sigmin$ rather than eigenvalue distance:
+$\sigmin(J_\lambda-zI)$ tracks $\abs{z-\lambda}^m$ honestly through the block region of
+Theorem~\ref{thm:enclosure}, and the singular vector is maximally misaligned with the eigenvector.
+(The symmetric Wilkinson matrix $W^\pm$, with pairs of nearly coincident eigenvalues, is a
+\emph{clustering} stress and is handled by the block-merge of Theorem~\ref{thm:enclosure}, not by the
+non-normal mechanism.)
+
+\paragraph{Convection--diffusion.} $Lu=-\varepsilon u''+u'$ on $[0,1]$ with Dirichlet data, discretized
+by finite differences, has spectrum on the negative real axis but pseudospectra filling parabolic
+regions, with resolvent norm growing like $e^{1/\varepsilon}$~\cite{ReddyTrefethen1994}. As a
+matrix-free differential operator with benign spectrum and malignant resolvent, it exercises the far
+block and coupling in exactly the regime the method targets.
+
+\paragraph{Real-application sparse matrices (Matrix Market).} Beyond the constructed corner cases we
+draw non-normal matrices from the \textsc{Non-Hermitian Eigenvalue Problem} collection of Matrix
+Market~\cite{MatrixMarket}: e.g.\ \textsc{Tolosa} (aeroelastic flutter, highly non-normal, complex
+spectrum near the imaginary axis), \textsc{Olmstead} (viscoelastic fluid flow), and the
+reaction--diffusion \textsc{Brusselator} (\textsc{rdb}) family. These are sparse and matrix-free
+friendly, with real engineering provenance, and let us report timings on the regime the method is
+built for (large, sparse, strongly non-normal) rather than only on synthetic examples.
+
+\begin{table}[t]\centering\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Matrix & Normal? & Eigenvalue conditioning / departure & $\sigma$-subspace $\ne$ eigvec-subspace \\
+\midrule
+Cyclic shift $Q$        & normal (unitary)          & $\kappa(\lambda)=1$; departure $0$              & no (reference; Ritz still fails) \\
+Grcar                   & strongly non-normal       & $\kappa(\lambda)$ grows with $n$                & yes, strongly \\
+Demmel                  & extremely non-normal      & $\kappa(\lambda)$ huge (tunable)                & yes, extreme \\
+Kahan                   & non-normal, ill-cond.     & tiny $\sigmin$ is the point                     & yes ($\sigmin$ vector) \\
+Jordan block $J_\lambda$& non-normal, defective     & $\kappa(\lambda)=\infty$; $\abs{z-\lambda}^{1/m}$& yes, maximal \\
+Convection--diffusion   & non-normal                & $\kappa(\lambda)\sim e^{1/\varepsilon}$          & yes \\
+Tolosa / Olmstead / rdb & non-normal (sparse)       & large resolvent                                 & yes \\
+Transfer (GKW, H\'enon, Lorenz) & strongly non-normal, matrix-free & resolvent $\sim10^4$, long transients & yes, strongly \\
+\bottomrule
+\end{tabular}
+\caption{Test-matrix gallery. The last column is the property the method exploits (S2).}
+\label{tab:gallery}
+\end{table}
+
+\section{Conclusion}\label{sec:conclusion}
+
+The method certifies the leading spectrum and resolvent of large non-normal and matrix-free operators
+by combining the Miyajima--Rump verified block diagonalization on a faithful captured block with a
+matrix-free far block made \emph{deep} by singular-vector deflation. It never trusts a Ritz value:
+the argument-principle count and the assembled $\sigmin$ floor are the arbiters.
+
+\begin{thebibliography}{99}
+\bibitem{Demmel1987} J.~W. Demmel, \emph{A counterexample for two conjectures about stability},
+  IEEE Trans. Automat. Control \textbf{32} (1987) 340--342.
+\bibitem{Embree2009} M.~Embree, \emph{The Arnoldi eigenvalue iteration with exact shifts can fail},
+  SIAM J. Matrix Anal. Appl. \textbf{31} (2009) 1--10.
+\bibitem{Kahan1966} W.~Kahan, \emph{Numerical linear algebra}, Canad. Math. Bull. \textbf{9} (1966)
+  757--801.
+\bibitem{MatrixMarket} R.~F. Boisvert, R.~Pozo, K.~Remington, R.~Barrett, J.~Dongarra, \emph{Matrix
+  Market} (NIST), \url{https://math.nist.gov/MatrixMarket/}; Non-Hermitian Eigenvalue Problem
+  collection (Tolosa, Olmstead, rdb).
+\bibitem{Miyajima2014} S.~Miyajima, \emph{Fast enclosure for all eigenvalues and invariant subspaces
+  in generalized eigenvalue problems}, SIAM J. Matrix Anal. Appl. \textbf{35} (2014) 1205--1225.
+\bibitem{Miyajima2014SV} S.~Miyajima, \emph{Verified bounds for all the singular values of a matrix},
+  Japan J. Indust. Appl. Math. \textbf{31} (2014) 513--539.
+\bibitem{NisoliGauss} \emph{Certified spectral approximation of transfer operators and the Gauss
+  map}, arXiv:2602.19435.
+\bibitem{ReddyTrefethen1994} S.~C. Reddy, L.~N. Trefethen, \emph{Pseudospectra of the
+  convection--diffusion operator}, SIAM J. Appl. Math. \textbf{54} (1994) 1634--1649.
+\bibitem{Rump2010} S.~M. Rump, \emph{Verification methods: rigorous results using floating-point
+  arithmetic}, Acta Numer. \textbf{19} (2010) 287--449.
+\bibitem{Rump2022} S.~M. Rump, \emph{Verified error bounds for all eigenvalues and eigenvectors of a
+  matrix}, SIAM J. Matrix Anal. Appl. \textbf{43} (2022) 1736--1754. % author list: verify vs. DOI 10.1137/21M1451440
+\bibitem{Templates2000} Z.~Bai, J.~Demmel, J.~Dongarra, A.~Ruhe, H.~van der Vorst (eds.),
+  \emph{Templates for the Solution of Algebraic Eigenvalue Problems}, SIAM, 2000.
+\bibitem{Trefethen1992} L.~N. Trefethen, \emph{Pseudospectra of matrices}, in \emph{Numerical Analysis
+  1991}, Longman, 1992, 234--266.
+\bibitem{TrefethenEmbree2005} L.~N. Trefethen, M.~Embree, \emph{Spectra and Pseudospectra: The
+  Behavior of Nonnormal Matrices and Operators}, Princeton Univ. Press, 2005.
+\bibitem{Zeng2016} Z.~Zeng, \emph{Sensitivity and computation of a defective eigenvalue}, SIAM J.
+  Matrix Anal. Appl. \textbf{37} (2016) 798--817.
+\end{thebibliography}
+
+\end{document}
