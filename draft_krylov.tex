@@ -692,6 +692,21 @@ $\sigmin(A-zI)$; at a true eigenvalue the gap is $\le0$.
 
 \subsection{Transfer operators of chaotic maps (matrix-free)}
 
+\begin{remark}[Status of the numbers in this subsection --- re-verification in progress]\label{rem:rerun}
+\textcolor{red}{The figures reported below were produced by an earlier implementation, before the
+correction of Proposition~\ref{prop:lanczosfloor}. In that implementation the far-block quantity
+$\norm{G_{22}}_2$ --- on which $\sig_{22}\ge\abs{z}-\norm{G_{22}}_2$ and hence every circle certificate
+depends --- was computed from a $40$-step Lanczos, and the floor used the projected residual
+$\bar Q_k^*S_k$. By Proposition~\ref{prop:lanczosfloor} neither is a certificate: an \emph{upper} bound
+on $\lambda_{\max}$ requires the same completeness direction as the floor, since a missed large
+eigenvalue is exactly as invisible to a partial basis as a missed small one. These numbers are
+therefore \emph{not} currently backed by a proof and are being recomputed with the full-basis
+certificate; they are retained here only as the provisional record of what the method achieves, and
+should not be read as certified until this remark is removed. We expect them to be confirmed --- the
+independent smoothing benchmark of Section~\ref{sec:farfielddemo} reproduced its numbers exactly under
+the corrected code --- but expectation is not certification.}
+\end{remark}
+
 We take $A$ the Ulam (Perron--Frobenius) discretization of a noisy map on a uniform grid, applied
 matrix-free. Noise width $0.1$; depth-$6$ grid, $n=4096$.
 
