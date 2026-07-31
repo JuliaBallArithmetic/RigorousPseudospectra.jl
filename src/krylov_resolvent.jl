@@ -268,9 +268,9 @@ end
 function far_floor(L::LanczosRun, N::Int = 0)
     k = L.k
     k < 2 && return (0.0, Float64(L.α[1]), Inf, Float64(L.R2))
-    # θ_min from the tridiagonal in Float64 — eigenvalues are well conditioned and θ_min ~1e-7
-    # is representable, so the slow generic BigFloat symmetric eigensolve is unnecessary.
-    θmin = minimum(eigvals(SymTridiagonal(Float64.(L.α[1:k]), Float64.(L.β[1:(k - 1)]))))
+    # CERTIFIED θ_min⁻ by O(N) Sturm/LDLᵀ inertia bisection — not a Float64 eigensolve, and not
+    # the O(N³) dense verified route (which would discard the tridiagonal structure).
+    θmin, _ = certified_tridiag_extremes(@view(L.α[1:k]), @view(L.β[1:(k - 1)]))
     S = lanczos_deviation(L)
     β22 = L.R2 < 1 ? Float64(S / sqrt(1 - L.R2)) : Inf
     # FULL-BASIS GATE: without a complete basis of the invariant subspace there is no
@@ -287,6 +287,163 @@ function lanczos_deviation(L::LanczosRun)
     return L.β[k] + sqrt(sum(abs2, @view L.fn[1:k]))
 end
 
+# ----------------------------------------------------------------------------------------
+# CERTIFIED extremal eigenvalues of the symmetric tridiagonal T_N (Prop. 5's `θ_min⁻`/`θ_max⁺`).
+#
+# Prop. 5 needs a RIGOROUS bound on λ_min(T_N), not the Float64 output of an eigensolver. The
+# Miyajima–Rump enclosure of §2 would serve (T_N is Hermitian ⇒ κ₂=1) and is conceptually the
+# tidy answer — the paper's first pillar closing on its second — but it runs `eigen`+`inv` on a
+# DENSE N×N: O(N³) time, O(N²) memory. For a far block with N≈4000 that dwarfs the N matvecs and
+# discards the very tridiagonality the Lanczos produced. So it is NOT the default.
+#
+# Instead we certify the INERTIA, which is exactly what a one-sided bound needs and is O(N) time /
+# O(1) memory. For symmetric tridiagonal T the LDLᵀ pivots of T − sI obey the Sturm recurrence
+#       d₁ = α₁ − s,      dᵢ = (αᵢ − s) − βᵢ₋₁²/dᵢ₋₁ ,
+# and #{i : dᵢ < 0} = #{eigenvalues of T below s} (Sylvester's law of inertia). Hence a certified
+# count of 0 proves λ_min(T) ≥ s. We run the recurrence in ball (centre–radius) arithmetic with
+# outward rounding; if any pivot ball straddles 0 the sign is not certified and we report failure
+# (the bisection then treats s conservatively). No dense factorization, no eigensolver.
+# ----------------------------------------------------------------------------------------
+
+# One Sturm/LDLᵀ sweep in ball arithmetic. Returns (count, certified). O(N) time, O(1) memory.
+function _sturm_count(α::AbstractVector, β::AbstractVector, s::Float64)
+    N = length(α)
+    u = eps(Float64)
+    cnt = 0
+    c = Float64(α[1]) - s                       # pivot centre
+    r = u * abs(c) + floatmin(Float64)          # pivot radius (outward)
+    for i in 1:N
+        if i > 1
+            b = Float64(β[i - 1])
+            # βᵢ₋₁² / dᵢ₋₁ in ball arithmetic; needs the previous pivot to exclude 0
+            r >= abs(c) && return (cnt, false)  # pivot straddles 0 ⇒ inertia not certified
+            b2 = b * b * (1 + 2u)
+            qc = b2 / c
+            qr = b2 * r / (abs(c) * (abs(c) - r)) + 2u * abs(qc) + floatmin(Float64)
+            nc = Float64(α[i]) - s - qc
+            nr = qr + u * (abs(Float64(α[i])) + abs(s) + abs(qc)) + floatmin(Float64)
+            c, r = nc, nr
+        end
+        r >= abs(c) && return (cnt, false)      # sign of this pivot not certified
+        c < 0 && (cnt += 1)
+    end
+    return (cnt, true)
+end
+
+"""
+    cert_lambda_min_chol(C, α) -> lower bound on λ_min(C) (or -Inf if not certified)
+
+Rump's positive-definiteness certificate. Runs the **library-optimized** LAPACK float64 Cholesky
+on the Hermitian `C - αI`. If the factorization completes, Demmel's backward-error analysis gives
+`C - αI + ΔC = RᴴR ⪰ 0` **exactly**, with `|ΔC| ≤ γ_{n+1}|Rᴴ||R|` entrywise, `γ_k = ku/(1-ku)`.
+Hence `λ_min(C) ≥ α - ‖ΔC‖₂`, and `‖ΔC‖₂ ≤ γ_{n+1}‖|Rᴴ||R|‖₁` since `|Rᴴ||R|` is symmetric PSD.
+
+The point (Rump): the *success of the optimized floating-point factorization is itself the
+certificate* — no interval arithmetic in the inner loop, no verified eigensolver. Only one
+a-posteriori norm is computed. The shift `α` is essential: an unshifted successful Cholesky only
+gives `λ_min ≥ -‖ΔC‖`, which is vacuous; shifting first turns it into a positive lower bound.
+"""
+function cert_lambda_min_chol(C::AbstractMatrix, α::Real)
+    n = size(C, 1)
+    u = eps(Float64)
+    (n + 1) * u >= 1 && return -Inf
+    F = cholesky(Hermitian(Matrix(C) - Float64(α) * I), check = false)
+    issuccess(F) || return -Inf
+    aR = abs.(Matrix(F.U))
+    # ‖|Rᴴ||R|‖₁ with a generous outward inflation for the products/sums themselves
+    G = aR' * aR
+    nrm = maximum(sum(G, dims = 1)) * (1 + 4 * n * u)
+    γ = (n + 1) * u / (1 - (n + 1) * u)
+    return Float64(α) - γ * nrm
+end
+
+# STRUCTURED overload: a SymTridiagonal must NEVER be densified (`Matrix(C)` on the N≈10⁴–10⁶
+# tridiagonals this method produces would be O(N²) memory — gigabytes to terabytes). Julia's
+# `ldlt(::SymTridiagonal)` keeps the factor tridiagonal (`LDLt{…,SymTridiagonal}`) and runs in
+# O(N) time / O(N) memory; the pivots `F.data.dv` are exactly the Sturm quantities dᵢ of
+# \eqref{eq:sturm}, so "all pivots > 0" ⇔ Cholesky succeeds ⇔ T − αI ≻ 0. The a-posteriori
+# bound is the same Demmel/Rump one, with |Rᴴ||R| tridiagonal so its 1-norm costs O(N).
+function cert_lambda_min_chol(C::SymTridiagonal, α::Real)
+    N = size(C, 1)
+    u = eps(Float64)
+    (N + 1) * u >= 1 && return -Inf
+    a = Float64.(C.dv) .- Float64(α)
+    b = Float64.(C.ev)
+    # O(N), stays tridiagonal (`LDLt{…,SymTridiagonal}`). Julia's tridiagonal `ldlt` permits
+    # indefinite factors, so success is decided by the pivots: all dᵢ > 0 and finite ⇔ Cholesky
+    # of T − αI exists ⇔ T − αI ≻ 0. A zero pivot throws; treat that as failure.
+    F = try
+        ldlt(SymTridiagonal(a, b))
+    catch
+        return -Inf
+    end
+    all(x -> isfinite(x) && x > 0, F.data.dv) || return -Inf
+    d = F.data.dv                                          # LDLᵀ pivots (> 0)
+    e = F.data.ev                                          # unit-lower L subdiagonal
+    # R = L√D is lower bidiagonal: R[i,i]=√dᵢ, R[i+1,i]=eᵢ√dᵢ. With rs_k the k-th row sum of |R|,
+    #   rs_k = |e_{k-1}|√d_{k-1} + √d_k,
+    # the i-th row sum of |Rᴴ||R| = Σ_k |R|_{ki}·rs_k, and column i of |R| is supported on k=i,i+1:
+    #   rowsum_i = √dᵢ·rs_i + |eᵢ|√dᵢ·rs_{i+1}.
+    # ‖|Rᴴ||R|‖₁ = max_i rowsum_i (the matrix is symmetric, so 1- and ∞-norms coincide). O(N).
+    sd = sqrt.(d)
+    rs(k) = (k > 1 ? abs(e[k - 1]) * sd[k - 1] : 0.0) + sd[k]
+    nrm = 0.0
+    for i in 1:N
+        s = sd[i] * rs(i) + (i < N ? abs(e[i]) * sd[i] * rs(i + 1) : 0.0)
+        nrm = max(nrm, s)
+    end
+    nrm *= (1 + 16 * u)                                    # outward inflation for the bound itself
+    γ = (N + 1) * u / (1 - (N + 1) * u)
+    return Float64(α) - γ * nrm
+end
+
+"""
+    certified_tridiag_extremes(α, β; maxiter=200) -> (θmin_lower, θmax_upper)
+
+RIGOROUS outer bounds on the extreme eigenvalues of the symmetric tridiagonal with diagonal `α`
+and off-diagonal `β`, by certified Sturm/LDLᵀ inertia bisection (Prop. 5, `θ_min⁻`/`θ_max⁺`).
+`O(N)` per bisection step and `O(1)` memory — the tridiagonal structure is exploited, unlike a
+dense verified eigensolver (`O(N³)`). The starting brackets are Gershgorin (rigorous for a
+Hermitian matrix) and the Rayleigh quotients at the coordinate vectors.
+"""
+function certified_tridiag_extremes(α::AbstractVector, β::AbstractVector; maxiter::Int = 200)
+    N = length(α)
+    N == 0 && return (0.0, 0.0)
+    a = Float64.(α)
+    b = Float64.(β)
+    # Gershgorin: rigorous two-sided bracket for a Hermitian tridiagonal
+    glo = Inf
+    ghi = -Inf
+    for i in 1:N
+        rad = (i > 1 ? abs(b[i - 1]) : 0.0) + (i < N ? abs(b[i]) : 0.0)
+        glo = min(glo, a[i] - rad)
+        ghi = max(ghi, a[i] + rad)
+    end
+    pad = 4 * eps(Float64) * max(abs(glo), abs(ghi)) + floatmin(Float64)
+    glo -= pad
+    ghi += pad
+    # λ_min: largest s with a certified inertia count of 0.  (min a[i] is a Rayleigh upper bound.)
+    lo = glo
+    hi = minimum(a)
+    for _ in 1:maxiter
+        mid = 0.5 * (lo + hi)
+        (mid <= lo || mid >= hi) && break
+        cnt, ok = _sturm_count(a, b, mid)
+        (ok && cnt == 0) ? (lo = mid) : (hi = mid)
+    end
+    θmin = lo
+    # λ_max: smallest s with a certified count of N.  (max a[i] is a Rayleigh lower bound.)
+    lo2 = maximum(a)
+    hi2 = ghi
+    for _ in 1:maxiter
+        mid = 0.5 * (lo2 + hi2)
+        (mid <= lo2 || mid >= hi2) && break
+        cnt, ok = _sturm_count(a, b, mid)
+        (ok && cnt == N) ? (hi2 = mid) : (lo2 = mid)
+    end
+    return (θmin, hi2)
+end
+
 # Rigorous UPPER bound on λ_max(M) from the same full-basis similarity (Prop. 5, other side):
 # λ_max(M) ≤ θ_max + ‖S‖/√(1−‖R₂‖). Returns `Inf` unless the basis is complete (k ≥ N) — the
 # completeness direction is exactly what an upper bound needs too (a missed LARGE eigenvalue
@@ -296,7 +453,7 @@ function lanczos_lambda_max(L::LanczosRun, N::Int)
     k < 1 && return Inf
     (L.R2 >= 1 || !(N > 0 && k >= N)) && return Inf
     θmax = k == 1 ? Float64(L.α[1]) :
-           maximum(eigvals(SymTridiagonal(Float64.(L.α[1:k]), Float64.(L.β[1:(k - 1)]))))
+           certified_tridiag_extremes(@view(L.α[1:k]), @view(L.β[1:(k - 1)]))[2]
     return θmax + Float64(lanczos_deviation(L) / sqrt(1 - L.R2))
 end
 

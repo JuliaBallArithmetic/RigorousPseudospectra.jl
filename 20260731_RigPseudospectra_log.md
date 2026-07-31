@@ -72,3 +72,33 @@ rem:cost ("a certified method is necessarily more expensive"), and rem:sturm —
 λ_min(T_N) is certified by MIYAJIMA–RUMP itself (κ₂=1 since T_N symmetric): pillar (i) discharges
 pillar (ii)'s hypothesis, so the chain closes with no external verified eigensolver (O(N) Sturm
 inertia bisection noted as the cheap structured alternative).
+
+### Certifying θ_min(T_N) without densifying — Rump's Cholesky trick
+
+**Nisoli's two points:** (a) λ_min(T_N) can be certified by Miyajima–Rump itself; (b) better, by
+Rump's positive-definiteness trick — if the LIBRARY-optimized float64 Cholesky of T_N − αI succeeds,
+then λ_min > α. Concern raised: *does the eigensolver/Cholesky densify?*
+
+**Measured (this is the answer):** `ldlt(::SymTridiagonal)` stays STRUCTURED (`LDLt{…,SymTridiagonal}`),
+O(N) time and memory: N=10^4/10^5/10^6 → 0.15/1.53/15.3 MB, 0.0002/0.001/0.015 s. Dense at N=10^6
+would be 7,450 GB. So the library route is viable WITHOUT densification. Full certificate
+(`cert_lambda_min_chol` structured overload) at N=10^6: 0.030 s, 38 MB.
+M–R on T_N would work (κ₂=1, T_N symmetric) but is O(N³)/O(N²) dense ⇒ small-N only, NOT the default.
+
+**Implemented:** `cert_lambda_min_chol(C, α)` — Rump/Demmel: float Cholesky of C−αI succeeds ⇒
+C−αI+ΔC = RᵀR ⪰ 0, |ΔC| ≤ γ_{N+1}|Rᵀ||R| ⇒ λ_min(C) ≥ α − γ_{N+1}‖|Rᵀ||R|‖₁. Dense method +
+SymTridiagonal overload (ldlt, O(N); |Rᵀ||R| tridiagonal ⇒ O(N) 1-norm; fixed an initial WRONG
+row-sum formula that under-estimated). NOTE the shift is essential: unshifted Cholesky gives only
+λ_min ≥ −‖ΔC‖ (vacuous). Also `certified_tridiag_extremes` (ball-arithmetic Sturm/inertia bisection,
+O(N)/O(1)) wired into far_floor + lanczos_lambda_max, replacing the Float64 `eigvals`.
+
+**Implementation validation (debugging, NOT paper evidence):** Sturm 1000 random tridiagonals, slack
+≤4.5e-15 rel; Cholesky 500 cases; both agree with LAPACK λ_min to all printed digits; N=64000 Sturm
+0.047 s. Tests unchanged (5 pass / 8 fail = pre-existing baseline).
+
+**FEEDBACK (Nisoli, important):** "what does it mean empirically? this is a math paper, either it is
+rigorous or it isn't." Removed all "sound in every case / 0 unsound" phrasing from the paper —
+soundness is a THEOREM, only SHARPNESS is measured. Also fixed the Faithfulness paragraph, where a
+"Hence" made rigor appear to follow from a measurement: svdbox(G11−zI) is κ-free rigorous for ANY Q;
+faithfulness governs only tightness ("a poor choice of Q costs accuracy, never correctness").
+Saved as memory rigor-is-proved-not-measured.md. Paper now 17 pp.

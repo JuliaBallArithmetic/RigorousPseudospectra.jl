@@ -110,9 +110,9 @@ reorthogonalized Lanczos whose orthogonality loss and deviation are bounded rigo
 scalar coefficients alone --- as a self-contained tool that encloses the extremal eigenvalues of any
 Hermitian matvec operator; it is useful independently of what follows, and it comes with a sharp
 delimitation of what a Krylov space can and cannot certify (Proposition~\ref{prop:lanczosfloor}).
-Component (i) moreover discharges the one hypothesis of (ii) --- the certified extremal eigenvalues of
-the small tridiagonal $T_N$ --- so the chain closes on itself with no external verified eigensolver
-(Remark~\ref{rem:sturm}). \textbf{(iii)} We \emph{join} the two
+The one hypothesis of (ii) --- certified extremal eigenvalues of the small tridiagonal $T_N$ --- is
+discharged without any verified eigensolver at all, by a rigorous Cholesky/inertia definiteness test
+costing $O(N)$ (Remark~\ref{rem:sturm}). \textbf{(iii)} We \emph{join} the two
 (Sections~\ref{sec:krylov}--\ref{sec:krylovcert}): a Krylov reduction certifies the eigenvalue
 \emph{block} with (i) and floors the matrix-free \emph{far} block with (ii), the far block made deep
 by deflating the top \emph{singular} directions of $A$ --- obtained by a Lanczos on $A^*A$ --- in
@@ -389,30 +389,66 @@ $M=(G-zI)^*(G-zI)\succeq0$ one has $\sigmin(G-zI)=\sqrt{\lambda_{\min}(M)}$, and
 monotone, giving the last claim after truncating a negative right-hand side at $0$.
 \end{proof}
 
-\begin{remark}[Certifying $\theta_{\min}$ with Miyajima--Rump: the construction closes on itself]\label{rem:sturm}
+\begin{remark}[Certifying $\theta_{\min}$: a Cholesky test, in $O(N)$]\label{rem:sturm}
 The proposition needs a rigorous \emph{lower} bound $\theta_{\min}^-$ on $\lambda_{\min}(T_N)$, not the
-floating-point output of a tridiagonal eigensolver. No new machinery is required: $T_N$ is a
-\emph{dense-solvable Hermitian matrix}, exactly the setting of Section~\ref{sec:mr}, so the
-Miyajima--Rump enclosure of Theorem~\ref{thm:enclosure} applies to it directly and certifies
-\emph{all} of its eigenvalues. The application is especially benign here. Since $T_N$ is real
-symmetric its eigenvector frame is orthogonal, so $\kappa_2(W)=1$ and the transport
-\eqref{eq:transport} is free; the blocks are singletons unless eigenvalues genuinely coincide, and the
-enclosure reduces to recentred Gershgorin discs about the diagonal of $\widetilde T=YT_NW$ inflated by
-the single slack $\beta_\Lambda$. Taking $\theta_{\min}^-$ as the left endpoint of the leftmost
-certified disc discharges the hypothesis.
+floating-point output of a tridiagonal eigensolver. The right tool is Rump's positive-definiteness
+certificate~\cite{Rump2006}: a one-sided eigenvalue bound is equivalent to a definiteness statement,
+\[
+  \lambda_{\min}(T_N)>s\quad\Longleftrightarrow\quad T_N-sI\succ0
+  \quad\Longleftrightarrow\quad \text{the Cholesky (}LDL^\top\text{) factorization of }T_N-sI\text{ exists,}
+\]
+so it suffices to \emph{certify a factorization}, never to compute a spectrum. The remarkable feature
+of Rump's formulation is that the certificate is the \emph{success of the ordinary, library-optimized
+floating-point factorization}. If the float64 Cholesky of $C=T_N-sI$ runs to completion, then by the
+classical backward analysis there exists $\Delta C$ with
+\[
+  C+\Delta C=R^\top R\ \succeq\ 0,\qquad \abs{\Delta C}\le\gamma_{N+1}\abs{R^\top}\abs{R}\ \ \text{entrywise},
+  \qquad \gamma_k=\frac{ku}{1-ku},
+\]
+so $C\succeq-\Delta C$ and therefore
+\begin{equation}\label{eq:rumpchol}
+  \lambda_{\min}(T_N)\;\ge\;s-\norm{\Delta C}_2,\qquad
+  \norm{\Delta C}_2\le\gamma_{N+1}\big\|\abs{R^\top}\abs{R}\big\|_1 .
+\end{equation}
+No interval arithmetic enters the inner loop: one runs the vendor kernel at full speed and computes a
+single a-posteriori norm. (The shift is essential --- an \emph{unshifted} successful Cholesky yields
+only $\lambda_{\min}\ge-\norm{\Delta C}$, which is vacuous; shifting first converts it into a genuine
+positive bound.)
 
-This is a pleasant structural feature rather than a technicality: the first pillar of the paper
-certifies the internal ingredient of the second. The Krylov reduction hands the infinite-dimensional
-or matrix-free problem down to a small Hermitian tridiagonal, and that tridiagonal is then closed off
-by the same dense enclosure the method started from --- no external verified eigensolver enters the
-chain anywhere.
+For a symmetric tridiagonal this is as cheap as it can possibly be, \emph{provided the structure is
+preserved}. The $LDL^\top$ pivots satisfy the Sturm recurrence
+\begin{equation}\label{eq:sturm}
+  d_1=\alpha_1-s,\qquad d_i=(\alpha_i-s)-\frac{\beta_{i-1}^2}{d_{i-1}},
+\end{equation}
+and $T_N-sI\succ0$ exactly when all $d_i>0$; more generally $\#\{i:d_i<0\}$ counts the eigenvalues
+below $s$ (Sylvester's law of inertia), so the same sweep certifies $\theta_{\max}^+$ from a count of
+$N$. Both the factorization and the norm in \eqref{eq:rumpchol} are then $O(N)$: with $R=L\sqrt D$
+lower bidiagonal, $\abs{R^\top}\abs{R}$ is tridiagonal and its $1$-norm is a single sweep. A dense
+Cholesky call on the same matrix would allocate $O(N^2)$ and is not an option at these sizes --- in our
+implementation the tridiagonal factorization of an $N=10^6$ operator certifies a bound in $0.03$\,s
+using $38$\,MB, where a densified call would require $7.5$\,TB. One may equally run
+\eqref{eq:sturm} directly in outward-rounded ball arithmetic, each pivot then carrying its own radius;
+the two routes agree to full working precision in our tests.
 
-Two practical notes. The dense enclosure costs $O(N^3)$, which for a large far block can exceed the
-$N$ matvecs themselves; when that matters, the $O(N)$ Sturm-sequence (inertia) bisection of
-$T_N-sI$ in outward-rounded interval arithmetic brackets $\lambda_{\min}(T_N)$ to any width and
-exploits the tridiagonal structure that the dense route discards. Either way the symmetric
-eigenproblem is perfectly conditioned (Weyl), so no $\kappa$ is incurred, and in every case we report
-the resulting uncertainty in $\theta_{\min}$ is dominated by $\beta_{\mathrm L}$.
+It is worth saying why we do \emph{not} take the tidier-looking route. $T_N$ is Hermitian and dense
+methods apply to it, so the Miyajima--Rump enclosure of Section~\ref{sec:mr} would certify all of its
+eigenvalues, and would do so in the most benign possible setting ($T_N$ real symmetric $\Rightarrow$
+orthogonal frame $\Rightarrow\kappa_2(W)=1$, transport \eqref{eq:transport} free). That would be a
+pleasing closure --- the first pillar of the paper discharging the hypothesis of the second. But it
+runs \texttt{eigen} and an approximate inverse on a dense $N\times N$: $O(N^3)$ time and $O(N^2)$
+memory. For a far block with $N$ in the thousands that dominates the $N$ matvecs and throws away the
+structure, so it is appropriate only for small $N$. The definiteness test is not a fallback but the
+correct algorithm: certifying one number requires certifying a factorization, not a diagonalization.
+
+The bound \eqref{eq:rumpchol} is rigorous by construction; what is worth quantifying is its
+\emph{sharpness}, since a certificate is of little use if it concedes orders of magnitude. It concedes
+almost nothing here. The slack is $\gamma_{N+1}\norm{\abs{R^\top}\abs{R}}_1=O(Nu\norm{T_N})$, so
+relative to $\norm{T_N}$ it is at the level of the working precision; on random tridiagonals we measure
+a relative slack below $5\times10^{-15}$, and the returned bracket agrees with the floating-point
+$\lambda_{\min}$ to full double precision. Consequently the uncertainty this step contributes to
+$\theta_{\min}^-$ is dominated by $\beta_{\mathrm L}$ throughout Section~\ref{sec:examples}. The
+symmetric eigenproblem is moreover perfectly conditioned (Weyl), so no $\kappa$ is incurred anywhere
+in this step.
 \end{remark}
 
 Three points deserve emphasis. First, the residual enters \emph{bare}: it is $\bar\beta_N$ itself, not
@@ -564,11 +600,16 @@ is then captured and certifiable, automatically: no guess of ``how many'' is nee
 three-block picture (good/bad/ugly) collapses to \emph{captured-good $+$ deep-far}: the ``bad''
 near-circle eigenvalues no longer need a separate block, because the deep far block absorbs them.
 
-\paragraph{Faithfulness.} With $Q$ from Definition~\ref{def:Q}, the captured compression is a
-\emph{faithful} stand-in for $A$ on the target circles: we measure $\sigmin(Q^*AQ-zI)\approx
-\sigmin(A-zI)$ to $\approx3\%$ (Section~\ref{sec:examples}), with no spurious eigenvalue of $Q^*AQ$
-near the circles. Hence $\sig_{11}=\svdbox(G_{11}-zI)$ is $\kappa_2$-free (the exact-SVD escape of
-Section~\ref{sec:mrres}); the ill-conditioning of the augmented block is irrelevant to it.
+\paragraph{Faithfulness --- a statement about sharpness, not about validity.} Two things must be kept
+apart here. That $\sig_{11}=\svdbox(G_{11}-zI)$ is a rigorous enclosure of $\sigmin(G_{11}-zI)$, and is
+$\kappa_2$-free, is a \emph{theorem} (the exact-SVD escape of Section~\ref{sec:mrres}); it holds for any
+$Q$ whatsoever, and the ill-conditioning of the augmented block is irrelevant to it. Nothing in the
+soundness of \eqref{eq:assembly} depends on how well $G_{11}$ represents $A$. What the choice of $Q$
+governs is only how \emph{tight} the resulting floor is, and this is a quantitative matter properly
+settled by measurement: with $Q$ from Definition~\ref{def:Q} the compression is a \emph{faithful}
+stand-in for $A$ on the target circles, $\sigmin(Q^*AQ-zI)$ agreeing with $\sigmin(A-zI)$ to
+$\approx3\%$ (Section~\ref{sec:examples}), with no spurious eigenvalue of $Q^*AQ$ near the circles. A
+poor choice of $Q$ would cost accuracy, never correctness.
 
 \section{Certification estimates for Krylov}\label{sec:krylovcert}
 
@@ -800,6 +841,8 @@ the argument-principle count and the assembled $\sigmin$ floor are the arbiters.
   symmetric matrix}, J. Inst. Math. Appl. \textbf{18} (1976) 341--349.
 \bibitem{ReddyTrefethen1994} S.~C. Reddy, L.~N. Trefethen, \emph{Pseudospectra of the
   convection--diffusion operator}, SIAM J. Appl. Math. \textbf{54} (1994) 1634--1649.
+\bibitem{Rump2006} S.~M. Rump, \emph{Verification of positive definiteness}, BIT Numer. Math.
+  \textbf{46} (2006) 433--452.
 \bibitem{Rump2010} S.~M. Rump, \emph{Verification methods: rigorous results using floating-point
   arithmetic}, Acta Numer. \textbf{19} (2010) 287--449.
 \bibitem{Rump2022} S.~M. Rump, \emph{Verified error bounds for all eigenvalues and eigenvectors of a
