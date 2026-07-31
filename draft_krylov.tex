@@ -43,10 +43,14 @@ interest, joined by a third. The first is the \emph{Miyajima--Rump} verified blo
 for dense matrices, which certifies eigenvalue enclosures and resolvent bounds from a single Neumann
 residual, with the non-normality confined to small diagonal blocks and only a benign inter-block
 conditioning transported through $\kappa_2$. The second is a \emph{certified Lanczos decomposition}:
-a tridiagonal Lanczos with partial reorthogonalization whose loss of orthogonality and Ritz residual
-are bounded rigorously --- streamed from the scalar recurrence coefficients \`a la Paige, without
-storing the basis or forming inner products --- yielding a verified floor on $\lambda_{\min}$ of any
-Hermitian operator supplied only as a matvec. Joining the two gives the third: a certified Krylov
+a tridiagonal Lanczos with partial reorthogonalization whose loss of orthogonality and deviation are
+bounded rigorously --- streamed from the scalar recurrence coefficients \`a la Paige --- yielding a
+verified two-sided enclosure of the extremal eigenvalues of any Hermitian operator supplied only as a
+matvec. We stress that this floor requires the \emph{full} basis: Ritz values of a partial Krylov space
+bound $\lambda_{\min}$ only from above, and it is squareness of the basis that converts the residual
+identity into a similarity and so supplies the missing completeness. A certified method is
+correspondingly more expensive than a floating-point one --- guaranteeing that no direction was missed
+is a statement about the whole space --- but the verified overhead beyond the matvecs is $O(1)$ per step. Joining the two gives the third: a certified Krylov
 method. A Krylov reduction splits $A$ into a dense \emph{captured} block, enclosed by Miyajima--Rump,
 and a matrix-free \emph{far} block, whose smallest singular value is floored by the certified Lanczos.
 The central observation making the join work is that for a non-normal operator the eigenvector
@@ -102,9 +106,13 @@ Our contribution is organized as three components. \textbf{(i)} We recall the Mi
 block diagonalization (Sections~\ref{sec:mr}--\ref{sec:mrres}), which encloses the eigenvalues of a
 dense block and bounds its resolvent from a single Neumann residual. \textbf{(ii)} We isolate a
 \emph{certified Lanczos decomposition} (Section~\ref{sec:lanczos}) --- a tridiagonal, partially
-reorthogonalized Lanczos whose orthogonality loss and Ritz residual are bounded rigorously from the
-scalar coefficients alone --- as a self-contained tool that floors $\lambda_{\min}$ of any Hermitian
-matvec operator; it is useful independently of what follows. \textbf{(iii)} We \emph{join} the two
+reorthogonalized Lanczos whose orthogonality loss and deviation are bounded rigorously from the
+scalar coefficients alone --- as a self-contained tool that encloses the extremal eigenvalues of any
+Hermitian matvec operator; it is useful independently of what follows, and it comes with a sharp
+delimitation of what a Krylov space can and cannot certify (Proposition~\ref{prop:lanczosfloor}).
+Component (i) moreover discharges the one hypothesis of (ii) --- the certified extremal eigenvalues of
+the small tridiagonal $T_N$ --- so the chain closes on itself with no external verified eigensolver
+(Remark~\ref{rem:sturm}). \textbf{(iii)} We \emph{join} the two
 (Sections~\ref{sec:krylov}--\ref{sec:krylovcert}): a Krylov reduction certifies the eigenvalue
 \emph{block} with (i) and floors the matrix-free \emph{far} block with (ii), the far block made deep
 by deflating the top \emph{singular} directions of $A$ --- obtained by a Lanczos on $A^*A$ --- in
@@ -274,29 +282,175 @@ $\norm{R_2}_2\le\sqrt{\norm{W}_1\norm{W}_\infty}$; likewise $\norm{R_1}_2$. The 
 discarded --- only the tridiagonal $T_k$ and a handful of running scalars are kept --- so the memory is
 $O(k)$ and the verified overhead is negligible against the matvecs.
 
-\begin{proposition}[Certified Lanczos floor]\label{prop:lanczosfloor}
-Let $M=M^*\succeq0$ be applied by matvec, and run the partially reorthogonalized Lanczos above for $k$
-steps, producing $T_k$ and the streamed bounds $\norm{R_1}_2$, $\norm{R_2}_2$. If
-$\norm{R_2}_2\le\rho<1$ then $\bar Q_k$ has full column rank and every eigenvalue of $M$ lies within
+\paragraph{Why a partial basis cannot give a floor.} It is tempting to read a lower bound off the
+Ritz values after $k\ll N$ steps. It is not available, and the obstruction is structural rather than
+one of sharpness. Since $T_k=\bar Q_k^*M\bar Q_k$ is the \emph{compression} of $M$ to
+$\mathcal S=\operatorname{ran}\bar Q_k$, the min--max principle gives
+\begin{equation}\label{eq:ritzabove}
+  \theta_{\min}\;=\;\min_{0\ne x\in\mathcal S}\frac{x^*Mx}{x^*x}\;\ge\;\lambda_{\min}(M)
+  \qquad\text{for every }k:
+\end{equation}
+Ritz values approach $\lambda_{\min}$ \emph{from above}. The deficit
+$\theta_{\min}-\lambda_{\min}(M)$ is governed by the angle $\angle(u_{\min},\mathcal S)$ between the
+true minimizing eigenvector and the Krylov space; if $u_{\min}\perp\mathcal S$ the deficit is the whole
+spectral gap, and \emph{no residual can detect this}. Indeed the projected residual
+$R_1=\bar Q_k^*S_k$ is small \emph{by construction} for every $k$, because
+$S_k=(I-\bar Q_k\bar Q_k^*)M\bar Q_k$ is orthogonal to $\mathcal S$: projecting it back onto
+$\mathcal S$ annihilates precisely the evidence of incompleteness. What the residual \emph{does}
+certify is the reverse inclusion --- each Ritz pair is an approximate eigenpair, so
+$\spec(T_k)\subseteq\spec(M)+[-\beta,\beta]$, giving an \emph{upper} bound on $\lambda_{\min}(M)$.
+A floor needs the \emph{completeness} direction $\spec(M)\subseteq\spec(T_k)+[-\beta,\beta]$, and for
+that the basis must be complete.
+
+\begin{proposition}[Certified Lanczos floor, full basis]\label{prop:lanczosfloor}
+Let $M=M^*$ act on an invariant subspace $\mathcal V$ of dimension $N$ containing the start vector, and
+run the Lanczos above for $k=N$ steps (restarting at breakdowns as in Remark~\ref{rem:breakdown}),
+producing the computed basis $\bar Q_N=[\bar q_1,\dots,\bar q_N]$, the symmetric (block-)tridiagonal
+$T_N$, the local defects $f_j$ of \eqref{eq:lanczosrec}, and the trailing $\bar\beta_N$. Put
 \[
-  \beta_{\mathrm L}\;=\;\frac{\norm{R_1}_2}{1-\rho}
+  \rho\;=\;\norm{R_2}_2=\norm{\bar Q_N^*\bar Q_N-I}_2,\qquad
+  \eta\;=\;\bar\beta_N\norm{\bar q_{N+1}}_2+\Big(\textstyle\sum_{j=1}^N\norm{f_j}^2\Big)^{1/2},\qquad
+  \beta_{\mathrm L}\;=\;\frac{\eta}{\sqrt{1-\rho}} ,
 \]
-of $\spec(T_k)$; in particular
+and let $\theta_{\min}^-\le\lambda_{\min}(T_N)$ and $\theta_{\max}^+\ge\lambda_{\max}(T_N)$ be certified
+bounds for the tridiagonal (Remark~\ref{rem:sturm}). If $\rho<1$ then $\bar Q_N$ is invertible and
 \[
-  \lambda_{\min}(M)\;\ge\;\underline\theta_{\min}-\beta_{\mathrm L},
-  \qquad \theta_{\min}=\lambda_{\min}(T_k),
+  \spec\!\big(M|_{\mathcal V}\big)\;\subseteq\;\spec(T_N)+[-\beta_{\mathrm L},\,\beta_{\mathrm L}],
 \]
-and hence, for $M=(G-zI)^*(G-zI)$, $\ \sigmin(G-zI)\ge\sqrt{\max(0,\ \underline\theta_{\min}-\beta_{\mathrm L})}$.
+so in particular
+\[
+  \lambda_{\min}\!\big(M|_{\mathcal V}\big)\;\ge\;\theta_{\min}^--\beta_{\mathrm L},
+  \qquad
+  \lambda_{\max}\!\big(M|_{\mathcal V}\big)\;\le\;\theta_{\max}^++\beta_{\mathrm L},
+\]
+and for $M=(G-zI)^*(G-zI)$, $\ \sigmin(G-zI)\ge\sqrt{\max(0,\,\theta_{\min}^--\beta_{\mathrm L})}$.
+All of $\rho$, $\bar\beta_N$, $\norm{f_j}$ are streamed from the scalar recurrence.
 \end{proposition}
 
-The single test $\norm{R_2}_2<1$ is simultaneously a \emph{nonsingularity} certificate (the computed
-basis is genuinely independent) and a \emph{completeness} certificate (the projected spectrum has not
-drifted from $M$'s by more than $\beta_{\mathrm L}$). The floor is sound for \emph{any} $k$: a short
-run gives a valid but loose bound, and running to a full basis makes it tight --- there is no hidden
-assumption that the Krylov space is complete. The floor is tightest when the wanted end of the spectrum
-is \emph{well separated} from the bulk, since then the corresponding $\bar\beta_j$ stay healthy and
-$\norm{R_2}_2$ remains small; a nearly-multiple bottom eigenvalue collapses a $\bar\beta_j$, inflates
-$\norm{R_2}_2$, and the certificate declines rather than lying. This separation-dependence is exactly
+\begin{proof}
+\emph{Step 1: $\bar Q_N$ is invertible, with a quantitative bound.} By definition
+$\bar Q_N^*\bar Q_N=I+R_2$, a Hermitian matrix, so by Weyl's inequality
+$\lambda_{\min}(\bar Q_N^*\bar Q_N)\ge1-\norm{R_2}_2=1-\rho>0$. Since
+$\sigmin(\bar Q_N)^2=\lambda_{\min}(\bar Q_N^*\bar Q_N)$, the matrix $\bar Q_N$ is nonsingular and
+\begin{equation}\label{eq:Qinv}
+  \norm{\bar Q_N^{-1}}_2\;=\;\frac{1}{\sigmin(\bar Q_N)}\;\le\;\frac{1}{\sqrt{1-\rho}} .
+\end{equation}
+
+\emph{Step 2: the residual, columnwise.} Write $S:=M\bar Q_N-\bar Q_NT_N$. Rearranging
+\eqref{eq:lanczosrec} at step $j$ gives the identity actually realized in floating point,
+\[
+  M\bar q_j\;=\;\bar\beta_{j-1}\bar q_{j-1}+\bar\alpha_j\bar q_j+\bar\beta_j\bar q_{j+1}-f_j .
+\]
+For $j<N$ the $j$-th column of $\bar Q_NT_N$ is exactly
+$\bar\beta_{j-1}\bar q_{j-1}+\bar\alpha_j\bar q_j+\bar\beta_j\bar q_{j+1}$, so $S e_j=-f_j$. For $j=N$
+the vector $\bar q_{N+1}$ is not a column of $\bar Q_N$ and $T_N$ carries no $(N+1,N)$ entry, so the
+term $\bar\beta_N\bar q_{N+1}$ survives: $Se_N=\bar\beta_N\bar q_{N+1}-f_N$. Hence
+\[
+  S\;=\;-F_N+\bar\beta_N\,\bar q_{N+1}e_N^{*},\qquad F_N=[f_1,\dots,f_N],
+\]
+and therefore, using $\norm{F_N}_2\le\norm{F_N}_F$ and $\norm{\bar q_{N+1}e_N^*}_2=\norm{\bar q_{N+1}}_2$,
+\begin{equation}\label{eq:Sbound}
+  \norm{S}_2\;\le\;\Big(\textstyle\sum_j\norm{f_j}^2\Big)^{1/2}+\bar\beta_N\norm{\bar q_{N+1}}_2\;=\;\eta .
+\end{equation}
+(At a restart boundary $j=k$ one sets $\bar\beta_k=0$ in $T_N$, so the $k$-th column of $\bar Q_NT_N$
+is $\bar\beta_{k-1}\bar q_{k-1}+\bar\alpha_k\bar q_k$ and $Se_k$ is the measured breakdown residual,
+which is recorded in $f_k$; the form \eqref{eq:Sbound} is unchanged.)
+
+\emph{Step 3: squareness turns the residual into a similarity.} This is the only place the hypothesis
+$k=N$ is used, and it is essential. Because $\bar Q_N$ is \emph{square} and, by Step 1, invertible,
+$M\bar Q_N=\bar Q_NT_N+S$ may be multiplied on the left by $\bar Q_N^{-1}$:
+\[
+  \bar Q_N^{-1}M\bar Q_N\;=\;T_N+E,\qquad E:=\bar Q_N^{-1}S,
+\]
+whence, by \eqref{eq:Qinv} and \eqref{eq:Sbound},
+$\norm{E}_2\le\norm{\bar Q_N^{-1}}_2\norm{S}_2\le\eta/\sqrt{1-\rho}=\beta_{\mathrm L}$. Since
+$\operatorname{ran}\bar Q_N=\mathcal V$ and similarity preserves the spectrum,
+\begin{equation}\label{eq:specequal}
+  \spec\!\big(M|_{\mathcal V}\big)\;=\;\spec(T_N+E)\qquad\text{\emph{exactly}} .
+\end{equation}
+
+\emph{Step 4: Bauer--Fike.} Let $\mu\in\spec(T_N+E)$ and suppose $\mu\notin\spec(T_N)$. Then
+$T_N-\mu I$ is invertible and
+\[
+  T_N+E-\mu I\;=\;(T_N-\mu I)\big(I+(T_N-\mu I)^{-1}E\big)
+\]
+is singular, so $I+(T_N-\mu I)^{-1}E$ is singular, forcing
+$\norm{(T_N-\mu I)^{-1}E}_2\ge1$ and hence $\norm{(T_N-\mu I)^{-1}}_2\norm{E}_2\ge1$. The matrix $T_N$
+is real symmetric, hence normal, so $\norm{(T_N-\mu I)^{-1}}_2=1/\operatorname{dist}(\mu,\spec(T_N))$;
+combining, $\operatorname{dist}(\mu,\spec(T_N))\le\norm{E}_2\le\beta_{\mathrm L}$. The same holds
+trivially when $\mu\in\spec(T_N)$. With \eqref{eq:specequal} this is exactly the asserted inclusion
+$\spec(M|_{\mathcal V})\subseteq\spec(T_N)+[-\beta_{\mathrm L},\beta_{\mathrm L}]$.
+
+\emph{Step 5: the extremal bounds.} By the inclusion, $\lambda_{\min}(M|_{\mathcal V})$ lies within
+$\beta_{\mathrm L}$ of some $\theta_i\in\spec(T_N)$, so
+$\lambda_{\min}(M|_{\mathcal V})\ge\theta_i-\beta_{\mathrm L}\ge\lambda_{\min}(T_N)-\beta_{\mathrm L}
+\ge\theta_{\min}^--\beta_{\mathrm L}$; symmetrically for $\lambda_{\max}$. Finally, for
+$M=(G-zI)^*(G-zI)\succeq0$ one has $\sigmin(G-zI)=\sqrt{\lambda_{\min}(M)}$, and the square root is
+monotone, giving the last claim after truncating a negative right-hand side at $0$.
+\end{proof}
+
+\begin{remark}[Certifying $\theta_{\min}$ with Miyajima--Rump: the construction closes on itself]\label{rem:sturm}
+The proposition needs a rigorous \emph{lower} bound $\theta_{\min}^-$ on $\lambda_{\min}(T_N)$, not the
+floating-point output of a tridiagonal eigensolver. No new machinery is required: $T_N$ is a
+\emph{dense-solvable Hermitian matrix}, exactly the setting of Section~\ref{sec:mr}, so the
+Miyajima--Rump enclosure of Theorem~\ref{thm:enclosure} applies to it directly and certifies
+\emph{all} of its eigenvalues. The application is especially benign here. Since $T_N$ is real
+symmetric its eigenvector frame is orthogonal, so $\kappa_2(W)=1$ and the transport
+\eqref{eq:transport} is free; the blocks are singletons unless eigenvalues genuinely coincide, and the
+enclosure reduces to recentred Gershgorin discs about the diagonal of $\widetilde T=YT_NW$ inflated by
+the single slack $\beta_\Lambda$. Taking $\theta_{\min}^-$ as the left endpoint of the leftmost
+certified disc discharges the hypothesis.
+
+This is a pleasant structural feature rather than a technicality: the first pillar of the paper
+certifies the internal ingredient of the second. The Krylov reduction hands the infinite-dimensional
+or matrix-free problem down to a small Hermitian tridiagonal, and that tridiagonal is then closed off
+by the same dense enclosure the method started from --- no external verified eigensolver enters the
+chain anywhere.
+
+Two practical notes. The dense enclosure costs $O(N^3)$, which for a large far block can exceed the
+$N$ matvecs themselves; when that matters, the $O(N)$ Sturm-sequence (inertia) bisection of
+$T_N-sI$ in outward-rounded interval arithmetic brackets $\lambda_{\min}(T_N)$ to any width and
+exploits the tridiagonal structure that the dense route discards. Either way the symmetric
+eigenproblem is perfectly conditioned (Weyl), so no $\kappa$ is incurred, and in every case we report
+the resulting uncertainty in $\theta_{\min}$ is dominated by $\beta_{\mathrm L}$.
+\end{remark}
+
+Three points deserve emphasis. First, the residual enters \emph{bare}: it is $\bar\beta_N$ itself, not
+its projection $\bar Q_N^*S$, that measures the deviation --- and this is what makes the bound
+self-policing. At $k<N$ the same formula has $\bar\beta_k=O(\norm{T})$, so $\beta_{\mathrm L}$ swamps
+$\theta_{\min}$ and the floor returns a non-positive (vacuous but sound) value rather than a
+number one might mistake for a certificate. Second, the test $\rho<1$ now plays a single honest role
+--- it certifies that the computed basis is genuinely a \emph{basis} --- while completeness comes from
+the dimension count $k=N$, not from any residual. Third, the bound is \emph{tight} at $k=N$: the
+Krylov space is exhausted, so $\bar\beta_N$ falls to rounding level.
+
+\begin{remark}[Breakdown is not completeness]\label{rem:breakdown}
+If $\bar\beta_k\approx0$ at some $k<N$ the Krylov space has closed on itself: $\operatorname{ran}\bar Q_k$
+is (nearly) invariant and $\spec(T_k)$ is a near-\emph{subset} of $\spec(M)$ --- again the wrong
+direction, since $\lambda_{\min}(M)$ may lie entirely on the untouched orthogonal complement. A
+``happy breakdown'' recovers the full spectrum only under a genericity assumption on the start vector
+(that it has a nonzero component in every eigenspace), which we do not certify --- and which finite
+precision makes delicate, a $10^{-18}$ component being indistinguishable from none. We therefore do not
+stop at breakdown: we set the block boundary $\bar\beta_k=0$ and restart from a fresh vector
+orthogonal to the accumulated basis, so the basis still attains dimension $N$. Then $T_N$ is
+block-tridiagonal, its spectrum is the union of the blocks', and Proposition~\ref{prop:lanczosfloor}
+applies verbatim.
+\end{remark}
+
+\begin{remark}[The cost of rigor]\label{rem:cost}
+Proposition~\ref{prop:lanczosfloor} requires $N$ matvecs, where a non-rigorous estimate would stop
+after a few dozen. This is not an artifact of our analysis but the price of the guarantee: certifying
+that \emph{no} direction --- in particular the minimizing one --- has been missed is a statement about
+the whole space, and a partial Krylov space simply does not contain that information. The certified
+method is necessarily more expensive than the floating-point one; what remains cheap is everything
+\emph{else}, since $\rho$, $\bar\beta_N$ and the $\norm{f_j}$ are streamed from the scalar recurrence
+at $O(1)$ overhead per step. In practice the far block is where this cost is paid, and it is paid once
+per operator, not per $z$ (Section~\ref{sec:farblock}).
+\end{remark}
+
+The floor is tightest when the wanted end of the spectrum is \emph{well separated} from the bulk, since
+then the $\bar\beta_j$ stay healthy and $\rho$ remains small; a nearly-multiple bottom eigenvalue
+inflates $\rho$ and the certificate declines rather than lying. This separation-dependence is exactly
 what the singular deflation of Section~\ref{sec:krylov} engineers for the far block.
 
 \section{The certified Krylov method}\label{sec:krylov}
@@ -425,20 +579,28 @@ We now assemble \eqref{eq:assembly} rigorously.
 Fix $z$ and put $M_z=(G_{22}-zI)^*(G_{22}-zI)\succeq0$ on $\operatorname{ran}P_\perp$; then
 $\sigmin(G_{22}-zI)=\sqrt{\lambda_{\min}(M_z)}$, and $M_z$ is applied by two matvecs (on $A,A^*$) plus
 the rank-$\dim Q$ projector $P_\perp$, with $G_{22}$ never formed. This is exactly the setting of the
-certified Lanczos decomposition of Section~\ref{sec:lanczos}: Proposition~\ref{prop:lanczosfloor}
-applied to $M_z$ gives, with the streamed bounds $\norm{R_1}_2,\norm{R_2}_2$ and $\rho=\norm{R_2}_2<1$,
+certified Lanczos decomposition of Section~\ref{sec:lanczos}. The Krylov run started from a vector in
+$\operatorname{ran}P_\perp$ stays there ($M_z$ maps that subspace to itself), so the relevant invariant
+subspace has dimension $N=n-\dim\mathcal Q$, and Proposition~\ref{prop:lanczosfloor} applied to $M_z$
+with $k=N$ gives
 \[
-  \sigmin(G_{22}-zI)\;\ge\;\sqrt{\max\!\big(0,\ \underline\theta_{\min}-\beta_{\mathrm L}\big)},
-  \qquad \beta_{\mathrm L}=\tfrac{\norm{R_1}_2}{1-\rho},\quad \theta_{\min}=\lambda_{\min}(T_k),
+  \sigmin(G_{22}-zI)\;\ge\;\sqrt{\max\!\big(0,\ \theta_{\min}^--\beta_{\mathrm L}\big)},
+  \qquad \beta_{\mathrm L}=\frac{\eta}{\sqrt{1-\rho}},
 \]
-a rigorous floor from matvecs alone. It is here that the \emph{deep} far block pays off: deflating the
+a rigorous floor from $N$ matvecs alone. It is here that the \emph{deep} far block pays off: deflating the
 top singular directions (Definition~\ref{def:Q}) lifts $\lambda_{\min}(M_z)$ away from $0$, so the
 bottom Ritz value does \emph{not} converge early, the divisor $\underline{\bar\beta_j}$ stays healthy,
 $\norm{R_2}_2<1$ holds, and the floor is sound and tight --- exactly the well-separated-bottom regime
 Proposition~\ref{prop:lanczosfloor} rewards. On a shallow (eigenvector-only) far block the bottom
 cluster collapses $\norm{R_2}_2$ and the certificate declines. In practice, once the far block is deep
 the $z$-independent shortcut \eqref{eq:farshort} suffices on the circles, and the per-$z$ Lanczos is a
-fallback triggered only where $\abs{z}\le\norm{G_{22}}_2$.
+fallback triggered only where $\abs{z}\le\norm{G_{22}}_2$. Note that the shortcut needs an \emph{upper}
+bound on $\norm{G_{22}}_2$, i.e.\ on $\lambda_{\max}$ of the same operator --- which requires the same
+completeness direction, since a missed \emph{large} eigenvalue is as invisible to a partial basis as a
+missed small one. We therefore obtain it from the $\lambda_{\max}$ half of
+Proposition~\ref{prop:lanczosfloor} at full basis. This is the one $O(N)$-matvec computation of the
+method, and it is performed \emph{once per operator}, not per $z$: the resulting $\norm{G_{22}}_2$ is
+$z$-independent and every circle reuses it.
 
 \subsection{The coupling}\label{sec:coupling}
 

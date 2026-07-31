@@ -30,3 +30,45 @@ method** = the join. Added Prop outerbdom (block-dominance) + fig:farfield; Rema
 complements; Lanczos = matrix-free eval of the far factor); Remark rem:rump (checked Rump2022a
 PDF: discrete all-eigenpairs enclosure ONLY — no resolvent/σ_min/pseudospectrum/Schur/Krylov;
 all of those are ours).
+
+## 2026-07-31 (later) — Proposition 5 was UNSOUND; fixed by the full-basis similarity
+
+**The gap (Nisoli spotted it).** Prop 5 claimed a σ_min floor "sound for any k". False. T_k = Q̄*MQ̄ is
+a COMPRESSION, so min–max gives θ_min ≥ λ_min(M) ALWAYS — Ritz converges from ABOVE. A floor needs the
+COMPLETENESS direction spec(M) ⊆ spec(T_k)+[−β,β], which residuals cannot supply: the deficit is the
+angle ∠(u_min, Krylov), invisible to any residual. Worse, the code used R1 = Q̄*S — the residual
+PROJECTED BACK onto the Krylov space, where S = (I−Q̄Q̄*)MQ̄ is orthogonal ⇒ ‖R1‖ ~ √u·β_k for EVERY k.
+That projection annihilated exactly the evidence of incompleteness and made the floor look k-independent.
+
+**The fix (Nisoli's call: full Lanczos).** At k = N the basis is SQUARE ⇒ the residual identity
+MQ̄ = Q̄T + S becomes a SIMILARITY Q̄⁻¹MQ̄ = T + E, E = Q̄⁻¹S ⇒ spec(M) = spec(T+E) EXACTLY; Bauer–Fike
+for the normal (symmetric) T gives spec(M) ⊆ spec(T) ± ‖E‖, ‖E‖ ≤ ‖S‖/√(1−ρ), σ_min(Q̄)² ≥ 1−ρ.
+Residual enters BARE: S = −F + β_N q_{N+1}e_N* ⇒ ‖S‖ ≤ β_N + ‖F‖_F. All streamed. Self-policing:
+at k<N the bare β_k = O(‖T‖) swamps θ_min ⇒ floor ≤ 0 (vacuous but SOUND).
+
+**Breakdown is NOT completeness.** β_k≈0 at k<N ⇒ ran(Q̄_k) merely INVARIANT ⇒ spec(T_k) a near-SUBSET;
+λ_min may live entirely on the untouched complement. "Happy breakdown" needs an uncertifiable genericity
+assumption on the start vector (1e-18 component ≢ none). Fix: RESTART on breakdown (β_k:=0 block
+boundary + fresh orthogonal vector) so the basis still reaches N; T becomes block-tridiagonal.
+
+**Code:** far_floor(L, N) with bare-β + √(1−ρ) and a strict k≥N gate; lanczos_deviation;
+lanczos_lambda_max (the ‖G22‖ UPPER bound needs the SAME completeness — a missed LARGE eigenvalue is
+equally invisible; it was being taken from a 40-step run!). Default kmax → full N = n−m (was n−m−1).
+Restart-on-breakdown in lanczos_pro.
+
+**Verified:** partial k → refuses (0/Inf); full k=N → SOUND + TIGHT (λfloor 9.91e-7 vs true 1.00e-6;
+low-rank/breakdown case exactly 0.25; λmax exact 3.000000). Corrected bound is TIGHTER than the old
+projected-R1 one at full basis. Honest note: I could NOT numerically break the old bound even with a
+start ⟂ u_min (|⟨u1,v⟩|=5e-18) — rounding reinjects the direction and Lanczos converges anyway (Paige
+ghosts). The gap was in the PROOF, not in observed behaviour; that is why production runs looked fine.
+
+**Impact:** bench/blockdom_farfield.jl reproduces IDENTICAL numbers with full Lanczos (median 1.987,
+max 2.000), now with a certified ‖G22‖. test/runtests.jl 5-pass/8-fail = unchanged pre-existing baseline.
+
+**Paper (16 pp):** Prop 5 restated (full basis, two-sided, η/√(1−ρ)) with a 5-step proof (invertibility
+via Weyl; columnwise S; squareness⇒similarity; Bauer–Fike for normal T; extremal bounds). Added
+"why a partial basis cannot give a floor" (min–max + the projection argument), rem:breakdown,
+rem:cost ("a certified method is necessarily more expensive"), and rem:sturm — Nisoli's point that
+λ_min(T_N) is certified by MIYAJIMA–RUMP itself (κ₂=1 since T_N symmetric): pillar (i) discharges
+pillar (ii)'s hypothesis, so the chain closes with no external verified eigensolver (O(N) Sturm
+inertia bisection noted as the cheap structured alternative).

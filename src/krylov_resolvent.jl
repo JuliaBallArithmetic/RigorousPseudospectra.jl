@@ -131,6 +131,7 @@ function lanczos_pro(Mz, n::Int, kmax::Int; v0 = nothing, reorth::Bool = true)
     # W[i,j] ≥ |ω_ij| = |⟨q_i,q_j⟩−δ_ij|, propagated online by Paige's recurrence.
     W = zeros(R, kmax + 1, kmax + 1)
     nreorth = 0
+    nrestart = 0        # invariant-subspace restarts (block boundaries β_k = 0 in T)
 
     q = v0 === nothing ? randn(ComplexF64, n) : copy(v0)
     q ./= norm(q)
@@ -185,11 +186,37 @@ function lanczos_pro(Mz, n::Int, kmax::Int; v0 = nothing, reorth::Bool = true)
         b = norm(r)
         β[k] = b
         Tnorm = max(Tnorm, abs(a) + b + βprev)
-        # breakdown: absolute (a true zero residual) OR relative (numerical rank / happy
-        # breakdown) — the Krylov subspace is invariant, hence COMPLETE for the deviation lemma.
+        # BREAKDOWN — the Krylov space has closed on itself before spanning the invariant
+        # subspace. This is NOT completeness: spec(T_k) is then a near-SUBSET of spec(M), and
+        # λ_min may live entirely on the untouched orthogonal complement (a "happy breakdown"
+        # yields the full spectrum only under an uncertifiable genericity assumption on the
+        # start vector). So we do NOT stop: we set the block boundary β_k = 0 and RESTART from
+        # a fresh vector orthogonal to everything so far, so the basis still reaches dimension
+        # `kmax`. T becomes block-tridiagonal and its spectrum is the union of the blocks —
+        # the full-basis similarity of Prop. 5 then applies verbatim.
         if !isfinite(b) || b <= u * abs(a) || b <= breaktol * Tnorm
-            kact = k
-            break
+            if !reorth || k >= kmax
+                kact = k
+                break
+            end
+            β[k] = zero(R)                       # block boundary: column k of S is just r
+            fn[k] = norm(a .* q .+ βprev .* qprev .- w)     # ‖S[:,k]‖ with β_k q_{k+1} dropped
+            qn = randn(T, n)
+            for _ in 1:2, i in 1:k               # orthogonalize against the whole basis
+
+                qn .-= cols[i] .* (cols[i]' * qn)
+            end
+            nn = norm(qn)
+            if nn <= sqrt(u) * sqrt(R(n))        # complement exhausted — basis is complete
+                kact = k
+                break
+            end
+            nrestart += 1
+            for i in 1:k                         # fresh column is orthogonal to all of them
+                W[i, k + 1] = W[k + 1, i] = u
+            end
+            qprev, βprev, q = q, zero(R), qn ./ nn
+            continue
         end
         qnext = r ./ b
         # realized local defect  f_k = a·q + βprev·qprev + b·qnext − M_z q   (here ≈ rounding)
@@ -204,30 +231,73 @@ function lanczos_pro(Mz, n::Int, kmax::Int; v0 = nothing, reorth::Bool = true)
 end
 
 # ----------------------------------------------------------------------------------------
-# Far-block floor σ_min(G22 − zI) = √(max(0, θ_min − β₂₂)) from a LanczosRun (draft Prop.).
-# Returns (σ₂₂, θ_min, ‖R₁‖, ‖R₂‖).
+# Far-block floor σ_min(G22 − zI) = √(max(0, θ_min − β₂₂)) from a LanczosRun (draft Prop. 5).
+# Returns (σ₂₂, θ_min, ‖S‖, ‖R₂‖); `N` is the dimension of the invariant subspace the Krylov
+# run lives in (for the deflated far block, N = n − m). Also see `lanczos_deviation`.
 #
-# Deviation lemma: spec(M_z) ⊂ ⋃ D(θ_i, β₂₂),  β₂₂ = ‖R₁‖₂/(1−‖R₂‖),  R₁ = Q*(M_zQ − QT_k).
-# Now  M_zQ − QT_k = β_k q_{k+1} eₖᵀ + F_k, so R₁ = β_k (Q*q_{k+1}) eₖᵀ + Q*F_k and
-#   |R₁[i,j]| ≤ β_k·wlast[i]·[j=k] + |⟨q_i,f_j⟩| ≤ β_k·wlast[i]·[j=k] + fn[j].
-# The β_k term is multiplied by the orthogonality wlast = |Q*q_{k+1}| (≈√u with reorth) — it
-# must NOT enter bare (that overcount, ~β_k, is what kept the floor pinned to 0 at partial
-# basis). ‖R₁‖₂ is bounded by the GEOMETRIC MEAN √(‖R₁‖₁‖R₁‖∞) (1- and ∞-norms), tighter
-# than Frobenius and the same bound used for ‖R₂‖.
-function far_floor(L::LanczosRun)
+# SOUNDNESS (the full-basis similarity — this is the whole argument).  A lower bound on
+# λ_min(M) needs the COMPLETENESS direction  spec(M) ⊆ spec(T_k) + [−β,β].  Ritz values are
+# Rayleigh quotients, so θ_min ≥ λ_min(M) ALWAYS (Ritz converges from above): a PARTIAL basis
+# gives NO lower bound — the deficit θ_min − λ_min is governed by the angle between the
+# minimizing eigenvector and the Krylov space, which no residual can see.  At k = N the basis
+# Q̄ is SQUARE on that subspace, and the residual identity becomes a SIMILARITY:
+#       M Q̄ = Q̄ T + S    ⟹   Q̄⁻¹ M Q̄ = T + E,   E = Q̄⁻¹S,
+# so spec(M) = spec(T + E) EXACTLY, and Bauer–Fike for the normal (real symmetric) T gives
+#       spec(M) ⊆ spec(T) + [−‖E‖, ‖E‖],   ‖E‖ ≤ ‖S‖/√(1−‖R₂‖),
+# using σ_min(Q̄)² = λ_min(Q̄*Q̄) ≥ 1 − ‖R₂‖.  THAT is the completeness certificate; it needs no
+# genericity, no invariance assumption, no angle condition.
+#
+# The residual must enter BARE.  From the recurrence, S = M Q̄ − Q̄T = −F + β_k q_{k+1}eₖᵀ, so
+#       ‖S‖ ≤ β_k + ‖F‖_F,   ‖F‖_F = √(Σ_j ‖f_j‖²)      (all streamed scalars).
+# The previous version used R₁ = Q̄*S — the residual PROJECTED BACK onto the Krylov space,
+# where S (being ⊥ to it) has almost nothing, so ‖R₁‖ ~ √u·β_k for EVERY k.  That hid the one
+# quantity measuring incompleteness and made the floor look k-independent.  It was unsound in
+# proof (though hard to break numerically: rounding reinjects missing directions and Lanczos
+# converges to extremal eigenvalues anyway — the Paige ghost phenomenon).
+#
+# At k < N the bare β_k is O(‖T‖), so β₂₂ swamps θ_min and the floor goes ≤ 0: the bound is
+# VACUOUS but SOUND, and it is self-policing — no separate validity test is needed beyond the
+# `full` gate below. At k = N the Krylov space is exhausted, β_N collapses to rounding level,
+# and the floor is both rigorous and TIGHTER than the old projected-R₁ bound.
+#
+# NOTE (early "happy breakdown" is NOT completeness). β_k ≈ 0 at k < N means ran(Q̄_k) is nearly
+# INVARIANT — spec(T_k) is then a near-SUBSET of spec(M), which is again the wrong direction:
+# λ_min(M) may live entirely on the untouched orthogonal complement. Breakdown gives the full
+# spectrum only under a genericity assumption on the start vector (that it has a nonzero
+# component on every eigenspace), which we do not certify. Hence the strict `k ≥ N` gate.
+function far_floor(L::LanczosRun, N::Int = 0)
     k = L.k
     k < 2 && return (0.0, Float64(L.α[1]), Inf, Float64(L.R2))
     # θ_min from the tridiagonal in Float64 — eigenvalues are well conditioned and θ_min ~1e-7
     # is representable, so the slow generic BigFloat symmetric eigensolve is unnecessary.
     θmin = minimum(eigvals(SymTridiagonal(Float64.(L.α[1:k]), Float64.(L.β[1:(k - 1)]))))
-    fns = @view L.fn[1:k]
-    wl = @view L.wlast[1:k]
-    R1_1 = max(L.β[k] * sum(wl) + k * fns[k], k * maximum(fns))     # max column sum of |R₁|
-    R1_inf = L.β[k] * maximum(wl) + sum(fns)                        # max row sum of |R₁|
-    R1 = sqrt(R1_1 * R1_inf)                                        # ‖R₁‖₂ ≤ √(‖R₁‖₁‖R₁‖∞)
-    # β₂₂ tiny in BigFloat (wlast,fn ~ √u, u) ⇒ clears θ_min where Float64 cannot.
-    β22 = L.R2 < 1 ? Float64(R1 / (1 - L.R2)) : Inf
-    return (sqrt(max(0.0, θmin - β22)), θmin, Float64(R1), Float64(L.R2))
+    S = lanczos_deviation(L)
+    β22 = L.R2 < 1 ? Float64(S / sqrt(1 - L.R2)) : Inf
+    # FULL-BASIS GATE: without a complete basis of the invariant subspace there is no
+    # completeness certificate and hence no lower bound. Refuse rather than report a number.
+    full = N > 0 && k >= N
+    σ = full ? sqrt(max(0.0, θmin - β22)) : 0.0
+    return (σ, θmin, Float64(S), Float64(L.R2))
+end
+
+# ‖S‖ ≤ β_k + ‖F‖_F — the BARE deviation of the computed decomposition M Q̄ = Q̄T + S, from
+# streamed scalars only. Divided by √(1−‖R₂‖) it is the Bauer–Fike radius of Prop. 5.
+function lanczos_deviation(L::LanczosRun)
+    k = L.k
+    return L.β[k] + sqrt(sum(abs2, @view L.fn[1:k]))
+end
+
+# Rigorous UPPER bound on λ_max(M) from the same full-basis similarity (Prop. 5, other side):
+# λ_max(M) ≤ θ_max + ‖S‖/√(1−‖R₂‖). Returns `Inf` unless the basis is complete (k ≥ N) — the
+# completeness direction is exactly what an upper bound needs too (a missed LARGE eigenvalue
+# is invisible to a partial basis).
+function lanczos_lambda_max(L::LanczosRun, N::Int)
+    k = L.k
+    k < 1 && return Inf
+    (L.R2 >= 1 || !(N > 0 && k >= N)) && return Inf
+    θmax = k == 1 ? Float64(L.α[1]) :
+           maximum(eigvals(SymTridiagonal(Float64.(L.α[1:k]), Float64.(L.β[1:(k - 1)]))))
+    return θmax + Float64(lanczos_deviation(L) / sqrt(1 - L.R2))
 end
 
 # ----------------------------------------------------------------------------------------
@@ -322,7 +392,13 @@ Because `G₂₂` does not depend on `z`, `σ_min(G₂₂ − zI)` is a fixed 1-
 function far_block_sigma_min(Amul, Aadj, n::Int, W::AbstractMatrix, z::Number;
         prec::Type = Float64, kmax::Int = 0, nullshift::Real = 10.0, reorth::Bool = true)
     m = size(W, 2)
-    kmax <= 0 && (kmax = n - m - 1)
+    # The Krylov run from a P₂₂-start lives in ran(P₂₂), of dimension N = n − m (M_z maps it to
+    # itself). A COMPLETE basis of that invariant subspace is N vectors — required for the
+    # full-basis similarity of Prop. 5 (`far_floor`'s `N` gate). This is the price of rigor: a
+    # certified floor needs N matvecs, because only a complete basis guarantees no direction —
+    # in particular the minimizing one — was missed.
+    N = n - m
+    kmax <= 0 && (kmax = N)
     Wt = prec == Float64 ? W : Matrix{Complex{prec}}(W)
     zz = Complex{prec}(z)
     ns = prec(nullshift)
@@ -335,8 +411,8 @@ function far_block_sigma_min(Amul, Aadj, n::Int, W::AbstractMatrix, z::Number;
         P22(v4) .+ ns .* (Wt * (Wt' * x))
     end
     L = lanczos_pro(Mz, n, kmax; v0 = P22(randn(Complex{prec}, n)), reorth = reorth)
-    σ22, θmin, R1, R2 = far_floor(L)
-    return σ22, (; θmin, R1, R2, k = L.k, nreorth = L.nreorth)
+    σ22, θmin, R1, R2 = far_floor(L, N)
+    return σ22, (; θmin, R1, R2, k = L.k, nreorth = L.nreorth, N, full = L.k >= N)
 end
 
 # Outer 2-block resolvent floor — the MAX of two certified lower bounds on σ_min(A − zI):
@@ -527,11 +603,13 @@ function _krylov_gap_setup(Amul, Aadj, n::Int; nblock::Int, refine::Integer, reo
     # ONE ugly-block ‖G₂₂‖ (z-independent): G₂₂ = P_V^⊥ A P_V^⊥, spectrum = the ugly ball near 0.
     Pv(x) = x .- V * (V' * x)
     GtG(x) = Pv(ComplexF64.(Aadj(Pv(ComplexF64.(Amul(Pv(x)))))))
-    Lg = lanczos_pro(GtG, n, min(40, n - 2); v0 = Pv(randn(ComplexF64, n)), reorth = reorth)
-    _, _, R1g, R2g = far_floor(Lg)
-    θmaxg = length(Lg.α) <= 1 ? (isempty(Lg.α) ? 0.0 : Lg.α[1]) :
-            maximum(eigvals(SymTridiagonal(Float64.(Lg.α), Float64.(Lg.β[1:(end - 1)]))))
-    G22n = R2g < 1 ? sqrt(max(0.0, θmaxg + R1g / (1 - R2g))) : Inf   # ‖G₂₂‖ upper bound
+    # ‖G₂₂‖ is an UPPER bound on λ_max, which needs the SAME completeness direction as the floor
+    # (a missed large eigenvalue is invisible to a partial basis) ⇒ FULL basis of ran(P_V),
+    # N = n − dim V. `lanczos_lambda_max` returns Inf if the basis is not complete.
+    Ng = n - size(V, 2)
+    Lg = lanczos_pro(GtG, n, Ng; v0 = Pv(randn(ComplexF64, n)), reorth = reorth)
+    _, _, R1g, R2g = far_floor(Lg, Ng)
+    G22n = sqrt(max(0.0, lanczos_lambda_max(Lg, Ng)))                # ‖G₂₂‖ upper bound
     return (; H, Hc, V, βN, mr, vr, λ, ord, γ, g12, g21, G22n, R2g)
 end
 
@@ -741,11 +819,12 @@ function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig
     γ = max(g12, g21)
     Pq(x) = x .- Qf * (Qf' * x)
     GtG(x) = Pq(ComplexF64.(Aadj(Pq(ComplexF64.(Amul(Pq(x)))))))
-    Lg = lanczos_pro(GtG, n, min(40, n - 2); v0 = Pq(randn(ComplexF64, n)), reorth = reorth)
-    _, _, R1g, R2g = far_floor(Lg)
-    θmaxg = length(Lg.α) <= 1 ? (isempty(Lg.α) ? 0.0 : Lg.α[1]) :
-            maximum(eigvals(SymTridiagonal(Float64.(Lg.α), Float64.(Lg.β[1:(end - 1)]))))
-    G22n = R2g < 1 ? sqrt(max(0.0, θmaxg + R1g / (1 - R2g))) : Inf
+    # FULL basis of ran(P_Q) (N = n − dim Q) — the completeness certificate for the ‖G₂₂‖ upper
+    # bound (Prop. 5). N matvecs: the price of rigour.
+    Ng = n - size(Qf, 2)
+    Lg = lanczos_pro(GtG, n, Ng; v0 = Pq(randn(ComplexF64, n)), reorth = reorth)
+    _, _, R1g, R2g = far_floor(Lg, Ng)
+    G22n = sqrt(max(0.0, lanczos_lambda_max(Lg, Ng)))
     # 6. per target eigenvalue: adaptive-radius isolation. Targets = the leading `neig`, or (when
     # `Rcirc` is set) EVERY certified block eigenvalue with |λ| > Rcirc — the automatic outside-R set.
     targets = Rcirc === nothing ? ord[1:min(neig, length(ord))] :
