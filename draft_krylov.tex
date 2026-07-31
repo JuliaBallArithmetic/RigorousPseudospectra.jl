@@ -38,24 +38,30 @@ of large non-normal and matrix-free operators}
 We give a matrix-free, interval-rigorous method that encloses the leading eigenvalues of a
 large non-normal operator $A$ --- available only through the maps $x\mapsto Ax$, $x\mapsto A^*x$
 --- and rigorously bounds its smallest singular value $\sigmin(A-zI)$ (equivalently the resolvent
-norm) on curves in the complex plane. The method rests on two ingredients. The first is the
-\emph{Miyajima--Rump} verified block diagonalization for dense matrices, which certifies
-eigenvalue enclosures and resolvent bounds from a single Neumann residual, with the non-normality
-confined to small diagonal blocks and only a benign inter-block conditioning transported through
-$\kappa_2$. The second is a Krylov reduction that splits the operator into a dense \emph{captured}
-block and a matrix-free \emph{far} block. The central observation is that for a non-normal operator
-the eigenvector (Arnoldi) Krylov space does \emph{not} span the leading singular directions --- so
-deflating it leaves the far block shallow in operator norm --- and that augmenting the captured
-subspace with the top right singular vectors, obtained from a Lanczos process on $A^*A$, makes the
-far block \emph{deep}: its matrix-free $\sigmin$ certificate then converges with a well-separated
-bottom. The captured compression is \emph{faithful} ($\sigmin(G_{11}-zI)\approx\sigmin(A-zI)$), so
-its verified SVD is $\kappa_2$-free. Circles are rigorously covered by an adaptive pearl cover, and each
-eigenvalue is rigorously enclosed by a cheap probe that locates the scale followed by a single
-verified check. We report rigorous enclosures for the Perron--Frobenius (Ulam) operators of the noisy
-H\'enon and contracting-Lorenz maps and the Gauss--Kuzmin--Wirsing operator, and we map the method's
-applicability on a gallery of standard non-normal matrices: it succeeds precisely when the singular
-spectrum decays (a low-dimensional resolvent tail) and \emph{fails safely} --- a non-positive floor or
-an explicit refusal, never a false enclosure --- when it does not.
+norm) on curves in the complex plane. The method assembles from two components, each of independent
+interest, joined by a third. The first is the \emph{Miyajima--Rump} verified block diagonalization
+for dense matrices, which certifies eigenvalue enclosures and resolvent bounds from a single Neumann
+residual, with the non-normality confined to small diagonal blocks and only a benign inter-block
+conditioning transported through $\kappa_2$. The second is a \emph{certified Lanczos decomposition}:
+a tridiagonal Lanczos with partial reorthogonalization whose loss of orthogonality and Ritz residual
+are bounded rigorously --- streamed from the scalar recurrence coefficients \`a la Paige, without
+storing the basis or forming inner products --- yielding a verified floor on $\lambda_{\min}$ of any
+Hermitian operator supplied only as a matvec. Joining the two gives the third: a certified Krylov
+method. A Krylov reduction splits $A$ into a dense \emph{captured} block, enclosed by Miyajima--Rump,
+and a matrix-free \emph{far} block, whose smallest singular value is floored by the certified Lanczos.
+The central observation making the join work is that for a non-normal operator the eigenvector
+(Arnoldi) Krylov space does \emph{not} span the leading singular directions --- so deflating it leaves
+the far block shallow in operator norm --- and that augmenting the captured subspace with the top right
+singular vectors, obtained from a Lanczos process on $A^*A$, makes the far block \emph{deep}: the
+certified-Lanczos floor then converges with a well-separated bottom. The captured compression is
+\emph{faithful} ($\sigmin(G_{11}-zI)\approx\sigmin(A-zI)$), so its verified SVD is $\kappa_2$-free.
+Circles are rigorously covered by an adaptive pearl cover, and each eigenvalue is rigorously enclosed
+by a cheap probe that locates the scale followed by a single verified check. We report rigorous
+enclosures for the Perron--Frobenius (Ulam) operators of the noisy H\'enon and contracting-Lorenz maps
+and the Gauss--Kuzmin--Wirsing operator, and we map the method's applicability on a gallery of standard
+non-normal matrices: it succeeds precisely when the singular spectrum decays (a low-dimensional
+resolvent tail) and \emph{fails safely} --- a non-positive floor or an explicit refusal, never a false
+enclosure --- when it does not.
 \end{abstract}
 
 \tableofcontents
@@ -92,15 +98,21 @@ $\norm{(A-zI)^{-1}}_2$ can be enormous at points far from the spectrum~\cite{Tre
       operator norm of the complementary block ($0.43$ against the true $\sigma_{257}(A)=0.12$), and
       a matrix-free $\sigmin$ certificate on that shallow far block does not converge.
 \end{itemize}
-Our contribution is a reduction that answers both. We certify the eigenvalue \emph{block} with the
-Miyajima--Rump machinery (Sections~\ref{sec:mr}--\ref{sec:mrres}), and we make the far block deep by
-deflating the top \emph{singular} directions of $A$ --- obtained by a Lanczos on $A^*A$ --- in
-addition to the eigenvector directions (Sections~\ref{sec:krylov}--\ref{sec:krylovcert}). The
-resulting certificate is matrix-free, sound, and certifies the leading spectrum in tens of seconds ---
-\emph{when the singular values of $A$ decay}, so that the far block can be made deep with a modest
-deflation. This is the transfer-operator regime; on full-rank non-normal matrices the method fails
-safely rather than universally succeeding (Section~\ref{sec:testmat}), which is the honest scope of the
-approach and, we argue, a necessary one.
+Our contribution is organized as three components. \textbf{(i)} We recall the Miyajima--Rump verified
+block diagonalization (Sections~\ref{sec:mr}--\ref{sec:mrres}), which encloses the eigenvalues of a
+dense block and bounds its resolvent from a single Neumann residual. \textbf{(ii)} We isolate a
+\emph{certified Lanczos decomposition} (Section~\ref{sec:lanczos}) --- a tridiagonal, partially
+reorthogonalized Lanczos whose orthogonality loss and Ritz residual are bounded rigorously from the
+scalar coefficients alone --- as a self-contained tool that floors $\lambda_{\min}$ of any Hermitian
+matvec operator; it is useful independently of what follows. \textbf{(iii)} We \emph{join} the two
+(Sections~\ref{sec:krylov}--\ref{sec:krylovcert}): a Krylov reduction certifies the eigenvalue
+\emph{block} with (i) and floors the matrix-free \emph{far} block with (ii), the far block made deep
+by deflating the top \emph{singular} directions of $A$ --- obtained by a Lanczos on $A^*A$ --- in
+addition to the eigenvector directions. The resulting certificate is matrix-free, sound, and certifies
+the leading spectrum in tens of seconds --- \emph{when the singular values of $A$ decay}, so that the
+far block can be made deep with a modest deflation. This is the transfer-operator regime; on full-rank
+non-normal matrices the method fails safely rather than universally succeeding
+(Section~\ref{sec:testmat}), which is the honest scope of the approach and, we argue, a necessary one.
 
 \paragraph{A note on scope.} When $A$ is the Ulam (Galerkin) discretization of an infinite-dimensional
 transfer operator, everything below is a rigorous statement about the \emph{matrix} $A$. Lifting it to
@@ -174,6 +186,20 @@ resolvent transport of Section~\ref{sec:mrres}. We compute it cheaply (a Collatz
 default, or tightly (one verified SVD of $W$) on request.
 \end{remark}
 
+\begin{remark}[What is Rump's, and what is ours]\label{rem:rump}
+Rump's verified all-eigenpairs method~\cite{Rump2022} (and Miyajima's earlier
+enclosures~\cite{Miyajima2014}) certify \emph{discrete} spectral data: the eigenvalues, and a basis of
+each invariant subspace, of a dense matrix in $O(n^3)$, from the almost-diagonal $\widetilde B=YBW=D+E$
+and a single contraction condition ($\varrho(\mathbf Z)<1$ in Rump's notation, our $\norm{R_2}_2<1$).
+There is no $z$-parameterized quantity in that work: no resolvent norm, no $\sigmin(A-zI)$, no
+pseudospectrum, and no Schur-complement or Krylov/matrix-free ingredient. Everything from
+Section~\ref{sec:mrres} onward --- the transport to a \emph{resolvent} lower bound
+$\sigmin(B-zI)$ over a \emph{region} of $z$, its block-Ger\v sgorin localization, the Schur-complement
+block assembly, and the matrix-free Lanczos far block --- is the pseudospectral layer this paper adds
+on top of that enclosure. We use the block-orthonormal \emph{Schur}+Newton frame (rather than the raw
+eigenvector matrix) precisely so that this resolvent layer inherits a benign $\kappa_2$.
+\end{remark}
+
 \section{Resolvent bounds from Miyajima--Rump}\label{sec:mrres}
 
 The same data bound the resolvent, cheaply, away from a small exclusion set. Since
@@ -214,10 +240,71 @@ large for one SVD, where its $O(\sum_j m_j^3)\ll O(m^3)$ cost is worth the $\kap
 \emph{no} per-block $\kappa_2$: the transport \eqref{eq:transport} is global; the escape is the exact
 SVD, not a local conditioning constant.
 
-\section{The Krylov approach}\label{sec:krylov}
+\section{A certified Lanczos decomposition}\label{sec:lanczos}
 
-Now $A$ is large or matrix-free. The dense VBD of Section~\ref{sec:mr} cannot run on all of $A$, but it
-can run on a small subspace. We split $\C^n$ into a captured subspace $\mathcal Q=\operatorname{ran}Q$
+The second component stands on its own, independent of the eigenvalue problem above: a rigorous floor
+on $\lambda_{\min}(M)$ of a Hermitian positive-semidefinite operator $M$ available \emph{only} as a
+matvec $x\mapsto Mx$. It is the verified counterpart of the symmetric Lanczos iteration, and we will
+use it in Section~\ref{sec:krylovcert} on $M=(G_{22}-zI)^*(G_{22}-zI)$; but nothing here refers to
+$A$, and the decomposition is reusable wherever a certified extremal eigenvalue of a large Hermitian
+matvec operator is wanted.
+
+\paragraph{The finite-precision recurrence.} A Lanczos process on $M$ builds a tridiagonal
+$T_k=\operatorname{tridiag}(\bar\beta_{j-1},\bar\alpha_j,\bar\beta_j)$ and a nominally orthonormal
+basis $\bar Q_k=[\bar q_1,\dots,\bar q_k]$. In floating point the computed vectors satisfy the
+\emph{perturbed} three-term recurrence
+\begin{equation}\label{eq:lanczosrec}
+  \bar\beta_j\,\bar q_{j+1}\;=\;M\bar q_j-\bar\alpha_j\bar q_j-\bar\beta_{j-1}\bar q_{j-1}+f_j,
+\end{equation}
+with local error $f_j$, and they \emph{lose orthogonality} as small Ritz values converge. We run
+\emph{partial (selective) reorthogonalization}: orthogonality is monitored and repaired only against
+the converged Ritz directions, keeping the cost near that of plain Lanczos while bounding the drift.
+Two residual matrices carry all the rigor,
+\begin{equation}\label{eq:lanczosres}
+  R_2\;=\;\bar Q_k^*\bar Q_k-I \quad(\text{loss of orthogonality}),\qquad
+  R_1\;=\;\bar Q_k^*\big(M\bar Q_k-\bar Q_kT_k\big)\quad(\text{Ritz residual}).
+\end{equation}
+
+\paragraph{Streaming the bound (Paige).} The decisive point is that neither residual needs the stored
+basis or any inner product: Paige's rounding-error analysis of \eqref{eq:lanczosrec} \emph{streams} a
+rigorous entrywise bound on $R_2$ (and on $R_1$) from the \emph{scalar} coefficients
+$(\bar\alpha_j,\bar\beta_j,\norm{f_j})$ alone~\cite{Paige1976,Rump2010}. We accumulate a nonnegative
+matrix $W\ge\abs{R_2}$ entrywise as the iteration proceeds and read off
+$\norm{R_2}_2\le\sqrt{\norm{W}_1\norm{W}_\infty}$; likewise $\norm{R_1}_2$. The basis itself may be
+discarded --- only the tridiagonal $T_k$ and a handful of running scalars are kept --- so the memory is
+$O(k)$ and the verified overhead is negligible against the matvecs.
+
+\begin{proposition}[Certified Lanczos floor]\label{prop:lanczosfloor}
+Let $M=M^*\succeq0$ be applied by matvec, and run the partially reorthogonalized Lanczos above for $k$
+steps, producing $T_k$ and the streamed bounds $\norm{R_1}_2$, $\norm{R_2}_2$. If
+$\norm{R_2}_2\le\rho<1$ then $\bar Q_k$ has full column rank and every eigenvalue of $M$ lies within
+\[
+  \beta_{\mathrm L}\;=\;\frac{\norm{R_1}_2}{1-\rho}
+\]
+of $\spec(T_k)$; in particular
+\[
+  \lambda_{\min}(M)\;\ge\;\underline\theta_{\min}-\beta_{\mathrm L},
+  \qquad \theta_{\min}=\lambda_{\min}(T_k),
+\]
+and hence, for $M=(G-zI)^*(G-zI)$, $\ \sigmin(G-zI)\ge\sqrt{\max(0,\ \underline\theta_{\min}-\beta_{\mathrm L})}$.
+\end{proposition}
+
+The single test $\norm{R_2}_2<1$ is simultaneously a \emph{nonsingularity} certificate (the computed
+basis is genuinely independent) and a \emph{completeness} certificate (the projected spectrum has not
+drifted from $M$'s by more than $\beta_{\mathrm L}$). The floor is sound for \emph{any} $k$: a short
+run gives a valid but loose bound, and running to a full basis makes it tight --- there is no hidden
+assumption that the Krylov space is complete. The floor is tightest when the wanted end of the spectrum
+is \emph{well separated} from the bulk, since then the corresponding $\bar\beta_j$ stay healthy and
+$\norm{R_2}_2$ remains small; a nearly-multiple bottom eigenvalue collapses a $\bar\beta_j$, inflates
+$\norm{R_2}_2$, and the certificate declines rather than lying. This separation-dependence is exactly
+what the singular deflation of Section~\ref{sec:krylov} engineers for the far block.
+
+\section{The certified Krylov method}\label{sec:krylov}
+
+We now \emph{join} the two components: the Miyajima--Rump enclosure of Section~\ref{sec:mr} on a small
+captured block, and the certified Lanczos floor of Section~\ref{sec:lanczos} on a matrix-free far
+block. Now $A$ is large or matrix-free. The dense VBD of Section~\ref{sec:mr} cannot run on all of $A$,
+but it can run on a small subspace. We split $\C^n$ into a captured subspace $\mathcal Q=\operatorname{ran}Q$
 ($Q$ with orthonormal columns) and its complement, and write $A$ in the block form of the orthonormal
 basis $[\,Q\mid Q_\perp\,]$,
 \begin{equation}\label{eq:2block}
@@ -234,6 +321,51 @@ $\sig_{22}=\sigmin(G_{22}-zI)$,
 \end{equation}
 positive whenever $\sig_{11},\sig_{22}>0$, for \emph{any} coupling $\gamma$. (The cruder Weyl bound
 $\min(\sig_{11},\sig_{22})-\gamma$ dies once $\gamma$ is large, which it is for non-normal operators.)
+
+\paragraph{Block-Ger\v sgorin sharpening.} The assembly \eqref{eq:assembly} charges both blocks the
+\emph{same} symmetric coupling $\gamma$. A block analogue of Feingold--Varga localizes it, charging
+each block only its \emph{own} off-block row: $r_1=\norm{G_{12}}_2$ for the captured block, $r_2=\norm{G_{21}}_2$
+for the far block. Because the outer basis is unitary this floor is $\kappa_2$-free.
+
+\begin{proposition}[Outer block-dominance floor]\label{prop:outerbdom}
+With $\sig_{11},\sig_{22}>0$ and $\tau(z)^2=\big(\norm{G_{12}}_2/\sig_{11}\big)^2+\big(\norm{G_{21}}_2/\sig_{22}\big)^2$,
+\[
+  \tau(z)<1\ \Longrightarrow\ \sigmin(A-zI)\;\ge\;\min(\sig_{11},\sig_{22})\,\big(1-\tau(z)\big).
+\]
+\end{proposition}
+\begin{proof}
+Factor $A-zI=D\big(I+D^{-1}E\big)$ with $D=\operatorname{blockdiag}(G_{11}-zI,G_{22}-zI)$ and $E$ the
+off-diagonal part. The block rows of $G=D^{-1}E$ are $(G_{11}-zI)^{-1}[\,0\ G_{12}\,]$ and
+$(G_{22}-zI)^{-1}[\,G_{21}\ 0\,]$, of norms $\le\norm{G_{12}}_2/\sig_{11}$ and $\le\norm{G_{21}}_2/\sig_{22}$,
+so $\norm{G}_2^2\le\sum_j\norm{G_{\text{row }j}}_2^2=\tau^2$. Then $\sigmin(I+G)\ge1-\tau$ and
+$\sigmin(A-zI)\ge\sigmin(D)\,\sigmin(I+G)=\min(\sig_{11},\sig_{22})(1-\tau)$. This is the two-block
+instance of the block-Ger\v sgorin/dominance floor for the Miyajima--Rump resolvent (the same argument
+as the localized floor \eqref{eq:blockdom} of Section~\ref{sec:mrres}, here with $\kappa_2=1$).
+\end{proof}
+
+Both \eqref{eq:assembly} and Proposition~\ref{prop:outerbdom} are certified lower bounds on the same
+$\sigmin(A-zI)$, so the engine returns their \emph{maximum}. The two are complementary: the
+block-dominance floor is up to $\approx2\times$ tighter when the couplings are small relative to the
+gaps --- the far field, away from the spectral cloud --- but it \emph{dies} ($\tau\ge1$) as $z$
+approaches an eigenvalue, where $\sig_{11}\to0$; there the Schur-complement assembly, positive for any
+$\gamma$, is the survivor. On the tight isolation circles of Section~\ref{sec:enclose}
+($\sig_{11}\sim10^{-2}$, $\gamma\sim1$) only the assembly contributes; the sharpening acts on the
+far-field resolvent (Figure~\ref{fig:farfield}), where it tightens the certified $\varepsilon$-pseudospectrum
+outside the far circle.
+
+\begin{remark}[One Schur-complement thread]\label{rem:schur}
+The three resolvent floors of this paper are the same idea at three scales. The Miyajima--Rump block
+floor (Lemma~\ref{lem:blockres}) factors $M-zI=(\Lambda-zI)\big(I+(\Lambda-zI)^{-1}(M-\Lambda)\big)$;
+the localized version \eqref{eq:blockdom} and the outer block-dominance
+(Proposition~\ref{prop:outerbdom}) are the block-row (Schur-complement) refinements of that
+factorization, charging each block only its own coupling; and the assembly \eqref{eq:assembly} is the
+$2\times2$ Schur-complement bound of the captured/far split. In every case the object being bounded is
+$\sigmin$ of a block after eliminating the coupling to the rest --- a Schur complement. The certified
+Lanczos of Section~\ref{sec:lanczos} enters this thread as the \emph{matrix-free evaluation of the far
+factor}: it floors $\sigmin(G_{22}-zI)$, the trailing block whose Schur complement completes the
+$2\times2$ bound, without ever forming $G_{22}$. The Lanczos is thus not a separate device bolted on;
+it is how one term of the Schur-complement assembly is certified when the operator is only a matvec.
+\end{remark}
 
 \subsection{Two subspaces, two jobs}\label{sec:twosub}
 
@@ -291,34 +423,22 @@ We now assemble \eqref{eq:assembly} rigorously.
 \subsection{The matrix-free far block}\label{sec:farblock}
 
 Fix $z$ and put $M_z=(G_{22}-zI)^*(G_{22}-zI)\succeq0$ on $\operatorname{ran}P_\perp$; then
-$\sigmin(G_{22}-zI)=\sqrt{\lambda_{\min}(M_z)}$ and $M_z$ is applied by two matvecs (on $A,A^*$) plus
-the rank-$\dim Q$ projector $P_\perp$, with $G_{22}$ never formed. A Lanczos on $M_z$ builds an
-orthonormal Krylov basis; in finite precision the computed $\bar q_j$ satisfy
-$\bar\beta_j\bar q_{j+1}=M_z\bar q_j-\bar\alpha_j\bar q_j-\bar\beta_{j-1}\bar q_{j-1}+f_j$ and lose
-orthogonality. Paige's recurrence \emph{streams} a rigorous bound on the basis-conditioning residual
-$R_2=\bar Q_k^*\bar Q_k-I$ from the scalar coefficients $(\bar\alpha_j,\bar\beta_j,\norm{f_j})$ ---
-no stored basis, no inner products --- and
-$\norm{R_2}_2\le\norm{W}_2\le\sqrt{\norm{W}_1\norm{W}_\infty}$ with $W\ge\abs{R_2}$ entrywise.
-
-\begin{proposition}[Matvec floor]\label{prop:matfloor}
-If $\norm{R_2}_2\le\rho<1$, then every eigenvalue of $M_z$ lies within
-$\beta^{(22)}=\norm{R_1}_2/(1-\rho)$ of $\spec(T_k)$ ($T_k$ the computed tridiagonal,
-$R_1=\bar Q_k^*(M_z\bar Q_k-\bar Q_kT_k)$), so
+$\sigmin(G_{22}-zI)=\sqrt{\lambda_{\min}(M_z)}$, and $M_z$ is applied by two matvecs (on $A,A^*$) plus
+the rank-$\dim Q$ projector $P_\perp$, with $G_{22}$ never formed. This is exactly the setting of the
+certified Lanczos decomposition of Section~\ref{sec:lanczos}: Proposition~\ref{prop:lanczosfloor}
+applied to $M_z$ gives, with the streamed bounds $\norm{R_1}_2,\norm{R_2}_2$ and $\rho=\norm{R_2}_2<1$,
 \[
-  \sigmin(G_{22}-zI)\;\ge\;\sqrt{\max\!\big(0,\ \underline\theta_{\min}-\beta^{(22)}\big)},
-  \qquad \theta_{\min}=\lambda_{\min}(T_k),
+  \sigmin(G_{22}-zI)\;\ge\;\sqrt{\max\!\big(0,\ \underline\theta_{\min}-\beta_{\mathrm L}\big)},
+  \qquad \beta_{\mathrm L}=\tfrac{\norm{R_1}_2}{1-\rho},\quad \theta_{\min}=\lambda_{\min}(T_k),
 \]
-a rigorous floor from matvecs alone. Both $R_1$ and $R_2$ stream from the scalar coefficients.
-\end{proposition}
-
-The single test $\norm{R_2}_2<1$ is simultaneously a nonsingularity and a completeness certificate.
-It is here that the \emph{deep} far block pays off: deflating the top singular directions lifts
-$\lambda_{\min}(M_z)$ away from $0$, so the bottom Ritz value does \emph{not} converge early, the
-divisor $\underline{\bar\beta_j}$ stays healthy, $\norm{R_2}_2<1$ holds, and the floor is sound and
-tight --- exactly the well-separated-bottom regime the singular deflation creates. On a shallow
-(eigenvector-only) far block the bottom cluster collapses $\norm{R_2}_2$ and the certificate declines.
-In practice, once the far block is deep the $z$-independent shortcut \eqref{eq:farshort} suffices on
-the circles, and the per-$z$ Lanczos is a fallback triggered only where $\abs{z}\le\norm{G_{22}}_2$.
+a rigorous floor from matvecs alone. It is here that the \emph{deep} far block pays off: deflating the
+top singular directions (Definition~\ref{def:Q}) lifts $\lambda_{\min}(M_z)$ away from $0$, so the
+bottom Ritz value does \emph{not} converge early, the divisor $\underline{\bar\beta_j}$ stays healthy,
+$\norm{R_2}_2<1$ holds, and the floor is sound and tight --- exactly the well-separated-bottom regime
+Proposition~\ref{prop:lanczosfloor} rewards. On a shallow (eigenvector-only) far block the bottom
+cluster collapses $\norm{R_2}_2$ and the certificate declines. In practice, once the far block is deep
+the $z$-independent shortcut \eqref{eq:farshort} suffices on the circles, and the per-$z$ Lanczos is a
+fallback triggered only where $\abs{z}\le\norm{G_{22}}_2$.
 
 \subsection{The coupling}\label{sec:coupling}
 
@@ -361,7 +481,7 @@ where to certify; the enclosure is rigorous.
 
 Every quantity feeding \eqref{eq:assembly} is a ball bound: $\sig_{11}$ from a verified SVD of the
 Float64 candidate block (the block entries carry only rounding, subsumed as in Section~\ref{sec:mr}),
-$\sig_{22}$ from Proposition~\ref{prop:matfloor} or the exact shortcut, and $\gamma$ from a verified
+$\sig_{22}$ from Proposition~\ref{prop:lanczosfloor} or the exact shortcut, and $\gamma$ from a verified
 Gram SVD. The routine refuses when $\norm{R_2}_2\ge1$. The rigorous $\sigmin$ never exceeds
 $\sigmin(A-zI)$; at a true eigenvalue the gap is $\le0$.
 
@@ -388,6 +508,33 @@ was the obstruction --- a high-precision SVD is unnecessary).
 
 \paragraph{Gauss--Kuzmin--Wirsing.} A benchmark whose sub-dominant eigenvalue (the GKW constant) is a
 classical target; the far block is low-rank, and a small captured block certifies the gap~\cite{NisoliGauss}.
+
+\subsection{Resolvent sharpening in the far field}\label{sec:farfielddemo}
+
+The block-dominance floor of Proposition~\ref{prop:outerbdom} sharpens the certified resolvent exactly
+where the couplings are small relative to the gaps. We exhibit it on a transfer-like operator --- a
+Gaussian-smoothing convolution ($n=300$, row-stochastic, spectral radius $1$) whose singular values
+decay to $10^{-8}$ by index $50$, so a captured block of dimension $\dim Q=52$ drives the far block to
+$\norm{G_{22}}_2\approx0$ and the coupling to $\gamma\approx0$: the pure decoupling limit. Over a
+grid of $19{,}880$ points outside the far circle, the block-dominance floor improves the pure
+Schur-complement floor by a factor $f_{\mathrm{new}}/f_{\mathrm{old}}$ of \emph{median $1.99$, maximum
+$2.00$} (above $1.05$ at $99\%$ of points) --- the theoretical $2\times$ ceiling of the sharpening
+($\gamma\to0$ turns $\sig_{11}\sig_{22}/(\sig_{11}+\sig_{22})$ into $\tfrac12\min$, which block-dominance
+lifts to $\min$). Figure~\ref{fig:farfield} overlays the two certified $\varepsilon$-pseudospectral
+contours: the block-dominance contours (solid) lie strictly inside the Schur-only contours (dashed).
+The gain is confined to the far field, as Proposition~\ref{prop:outerbdom} predicts; on the tight
+isolation circles it vanishes and the assembly \eqref{eq:assembly} carries the certificate.
+
+\begin{figure}[t]\centering
+\includegraphics[width=0.66\textwidth]{bench/figures/blockdom_farfield.png}
+\caption{Block-Ger\v sgorin sharpening of the far-field resolvent (Proposition~\ref{prop:outerbdom}),
+on a transfer-like smoothing operator. Rigorous lower bounds on $\sigmin(A-zI)$: the certified
+$\varepsilon$-pseudospectral contours from the pure Schur-complement assembly \eqref{eq:assembly}
+(dashed grey) and from $\max$ with the block-dominance floor (solid blue); eigenvalues marked
+$\times$. The block-dominance contours are uniformly tighter (up to $2\times$ larger floor) where the
+coupling is weak. Reproducible: \texttt{bench/blockdom\_farfield.jl}.}
+\label{fig:farfield}
+\end{figure}
 
 \subsection{Where the method applies --- and where it does not}\label{sec:testmat}
 
@@ -487,6 +634,8 @@ the argument-principle count and the assembled $\sigmin$ floor are the arbiters.
   Japan J. Indust. Appl. Math. \textbf{31} (2014) 513--539.
 \bibitem{NisoliGauss} \emph{Certified spectral approximation of transfer operators and the Gauss
   map}, arXiv:2602.19435.
+\bibitem{Paige1976} C.~C. Paige, \emph{Error analysis of the Lanczos algorithm for tridiagonalizing a
+  symmetric matrix}, J. Inst. Math. Appl. \textbf{18} (1976) 341--349.
 \bibitem{ReddyTrefethen1994} S.~C. Reddy, L.~N. Trefethen, \emph{Pseudospectra of the
   convection--diffusion operator}, SIAM J. Appl. Math. \textbf{54} (1994) 1634--1649.
 \bibitem{Rump2010} S.~M. Rump, \emph{Verification methods: rigorous results using floating-point

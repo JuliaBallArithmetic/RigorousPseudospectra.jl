@@ -261,15 +261,23 @@ _sigma_min_cert(M::AbstractMatrix) = _sigmin_lower(BallMatrix(Matrix(M)))
 # perturb each diagonal INDEPENDENTLY — a far bigger set than the common shift — and is much looser.)
 function _sigmin_circle(M::AbstractMatrix, center::Number, radius::Real;
         safety::Real = 0.5, ρfloor::Real = 0.02, maxpearls::Int = 4096)
-    T = eltype(M); R = real(T)                               # Float64 or BigFloat (svdbox precision)
-    c = T(center); rad = R(radius); saf = R(safety); ρf = R(ρfloor)
-    smin = R(Inf); θ = zero(R); np = 0; twoπ = 2 * R(π)
+    T = eltype(M)
+    R = real(T)                               # Float64 or BigFloat (svdbox precision)
+    c = T(center)
+    rad = R(radius)
+    saf = R(safety)
+    ρf = R(ρfloor)
+    smin = R(Inf)
+    θ = zero(R)
+    np = 0
+    twoπ = 2 * R(π)
     while θ < twoπ && np < maxpearls
         z = c + rad * (cos(θ) + im * sin(θ))
         σz = _sigma_min_cert(M - z * I)                       # point svdbox (common shift, exact)
         ρ = max(saf * max(σz, zero(R)), ρf * rad)             # pearl radius from the local σ_min
         smin = min(smin, σz - ρ)                              # 1-Lipschitz cover of |w−z| ≤ ρ
-        θ += 2ρ / rad; np += 1
+        θ += 2ρ / rad
+        np += 1
     end
     return smin
 end
@@ -280,11 +288,17 @@ end
 # overestimates by ~√rank (measured 5.34 vs true 1.33), which sank the assembly floor. And we
 # should NOT verified-SVD the WIDE n×m C directly (3s at n=4096, m=256); instead svd_bound the
 # `m×m` Hermitian `C*C` (0.5s, identical value) — ‖C‖₂² = ‖C*C‖₂. γ is z-independent, computed once.
-function _coupling_cert(Amul, Aadj, W)
+# The ASYMMETRIC coupling pair (g12, g21) = (‖G12‖, ‖G21‖) = (‖P₂₂A*W‖, ‖P₂₂AW‖): the two block
+# rows the block-dominance floor (`_assemble2`) charges SEPARATELY. For a non-normal A the two
+# differ — the adjoint coupling ‖G12‖ = ‖P₂₂A*W‖ typically dominates — and charging each block only
+# its own row is the Feingold–Varga sharpening. `_coupling_cert` is their max (the assembly γ).
+function _coupling_pair(Amul, Aadj, W)
     defl(M) = M .- W * (W' * M)
-    gram(op) = (Cb = BallMatrix(defl(_applycols(op, W))); sqrt(svd_bound_L2_opnorm(Cb' * Cb)))
-    return max(gram(Amul), gram(Aadj))
+    gram(op) = (
+        Cb = BallMatrix(defl(_applycols(op, W))); sqrt(svd_bound_L2_opnorm(Cb' * Cb)))
+    return (gram(Aadj), gram(Amul))                            # (‖G12‖, ‖G21‖)
 end
+_coupling_cert(Amul, Aadj, W) = maximum(_coupling_pair(Amul, Aadj, W))
 
 """
     far_block_sigma_min(Amul, Aadj, n, W, z; prec=Float64, kmax=0, nullshift=10.0, reorth=true)
@@ -310,7 +324,7 @@ function far_block_sigma_min(Amul, Aadj, n::Int, W::AbstractMatrix, z::Number;
     m = size(W, 2)
     kmax <= 0 && (kmax = n - m - 1)
     Wt = prec == Float64 ? W : Matrix{Complex{prec}}(W)
-    zz = Complex{prec}(z);
+    zz = Complex{prec}(z)
     ns = prec(nullshift)
     P22(x) = x .- Wt * (Wt' * x)
     Mz = function (x)
@@ -325,9 +339,28 @@ function far_block_sigma_min(Amul, Aadj, n::Int, W::AbstractMatrix, z::Number;
     return σ22, (; θmin, R1, R2, k = L.k, nreorth = L.nreorth)
 end
 
-# block-resolvent assembly (★): increasing in σ11 and σ22, so feeding their lower bounds
-# yields a valid lower bound on σ_min(A − zI).
-_assemble(σ11, σ22, γ) = (σ11 <= 0 || σ22 <= 0) ? 0.0 : σ11 * σ22 / (σ11 + σ22 + γ)
+# Outer 2-block resolvent floor — the MAX of two certified lower bounds on σ_min(A − zI):
+#   • Schur-complement assembly (★): σ11·σ22/(σ11+σ22+γ), γ=max(‖G12‖,‖G21‖) — positive for ANY
+#     coupling, never dies;
+#   • block-Geršgorin / Feingold–Varga block-dominance (draft.tex Prop. blockgersg/blockdom):
+#     min(σ11,σ22)·(1−τ), τ² = (‖G12‖/σ11)² + (‖G21‖/σ22)². κ-FREE — the captured/far outer basis
+#     is unitary, so no transport constant (the same footing the assembly already assumes). It is
+#     ≈2× tighter than the assembly when the couplings are small vs the gaps (the far field), but
+#     dies once τ≥1 (near the spectrum, where σ11→0); the assembly is the survivor there.
+# σ11 ↔ captured block G11 (its off-block row is G12), σ22 ↔ far block G22 (off-block row G21).
+# Both are valid lower bounds, so their max is too; feeding LOWER bounds of σ11,σ22 stays valid
+# (each term is increasing in σ11,σ22 on the live region).
+function _assemble2(σ11, σ22, g12, g21)
+    (σ11 <= 0 || σ22 <= 0) && return 0.0
+    γ = max(g12, g21)
+    schur = σ11 * σ22 / (σ11 + σ22 + γ)
+    τ = sqrt((g12 / σ11)^2 + (g21 / σ22)^2)
+    bdom = τ < 1 ? min(σ11, σ22) * (1 - τ) : 0.0
+    return max(schur, bdom)
+end
+# Symmetric back-compat: a scalar coupling γ charges both off-block rows the same (a valid, if
+# looser, over-estimate of each), so every legacy call site gains the block-dominance sharpening.
+_assemble(σ11, σ22, γ) = _assemble2(σ11, σ22, γ, γ)
 
 """
     krylov_resolvent_floor(Amul, Aadj, n, W, z; kmax=0, nullshift=10.0, reorth=true)
@@ -341,10 +374,11 @@ rank-1). `info` has `σ11, σ22, γ, R2, θmin, R1, k, nreorth`.
 function krylov_resolvent_floor(Amul, Aadj, n::Int, W0, z::Number; kwargs...)
     W = _frame(W0)
     H = _captured_block(Amul, W)
-    γ = _coupling_cert(Amul, Aadj, W)
+    g12, g21 = _coupling_pair(Amul, Aadj, W)
+    γ = max(g12, g21)
     σ22, info = far_block_sigma_min(Amul, Aadj, n, W, z; kwargs...)
     σ11 = _sigma_min_cert(H - z * I)                        # VERIFIED small SVD (svdbox)
-    floor = info.R2 >= 1 ? 0.0 : _assemble(σ11, σ22, γ)
+    floor = info.R2 >= 1 ? 0.0 : _assemble2(σ11, σ22, g12, g21)
     return floor, (; σ11, σ22, γ, info.R2, info.θmin, info.R1, info.k, info.nreorth)
 end
 
@@ -398,7 +432,8 @@ function certify_gap_on_circle(Amul, Aadj, n::Int, W0,
         nθ::Int = 64, kmax::Int = 0, nullshift::Real = 10.0, reorth::Bool = true)
     W = _frame(W0)
     H = _captured_block(Amul, W)
-    γ = _coupling_cert(Amul, Aadj, W)
+    g12, g21 = _coupling_pair(Amul, Aadj, W)
+    γ = max(g12, g21)
 
     # ONE expensive far-block Krylov, at the centre; 1-Lipschitz over the disk.
     σ22c, info = far_block_sigma_min(Amul, Aadj, n, W, center;
@@ -410,7 +445,7 @@ function certify_gap_on_circle(Amul, Aadj, n::Int, W0,
     σ11s = [_sigma_min_cert(H - (center + r * cis(2π * t / nθ)) * I) for t in 0:(nθ - 1)]
     σ11lo = minimum(σ11s) - 2 * r * sin(π / (2nθ))
 
-    floor = _assemble(σ11lo, σ22lo, γ)
+    floor = _assemble2(σ11lo, σ22lo, g12, g21)
     return KrylovCircleCertificate(ComplexF64(center), Float64(r), floor,
         σ11lo, σ22lo, γ, info.R2, floor > 0)
 end
@@ -487,7 +522,8 @@ function _krylov_gap_setup(Amul, Aadj, n::Int; nblock::Int, refine::Integer, reo
     vr = vbd_resolvent(mr.res)                            # good+bad block resolvent (row-residual)
     λ = mr.centres
     ord = sortperm(abs.(λ); rev = true)
-    γ = _coupling_cert(Amul, Aadj, V)                    # block↔ugly coupling, ONCE (tight svd bound)
+    g12, g21 = _coupling_pair(Amul, Aadj, V)             # block↔ugly coupling pair, ONCE (tight svd)
+    γ = max(g12, g21)
     # ONE ugly-block ‖G₂₂‖ (z-independent): G₂₂ = P_V^⊥ A P_V^⊥, spectrum = the ugly ball near 0.
     Pv(x) = x .- V * (V' * x)
     GtG(x) = Pv(ComplexF64.(Aadj(Pv(ComplexF64.(Amul(Pv(x)))))))
@@ -496,7 +532,7 @@ function _krylov_gap_setup(Amul, Aadj, n::Int; nblock::Int, refine::Integer, reo
     θmaxg = length(Lg.α) <= 1 ? (isempty(Lg.α) ? 0.0 : Lg.α[1]) :
             maximum(eigvals(SymTridiagonal(Float64.(Lg.α), Float64.(Lg.β[1:(end - 1)]))))
     G22n = R2g < 1 ? sqrt(max(0.0, θmaxg + R1g / (1 - R2g))) : Inf   # ‖G₂₂‖ upper bound
-    return (; H, Hc, V, βN, mr, vr, λ, ord, γ, G22n, R2g)
+    return (; H, Hc, V, βN, mr, vr, λ, ord, γ, g12, g21, G22n, R2g)
 end
 
 # Certify σ_min(A − zI) > 0 on ONE circle Γ = {center + radius·e^{iθ}}, reusing the shared setup.
@@ -523,10 +559,11 @@ function _certify_shared_circle(su, Amul, Aadj, n::Int, center::Number, radius::
         end
         σ11min = min(σ11min, σ11)
         σ22min = min(σ22min, σ22)
-        push!(floors, R2max < 1 ? _assemble(σ11, σ22, su.γ) : 0.0)
+        push!(floors, R2max < 1 ? _assemble2(σ11, σ22, su.g12, su.g21) : 0.0)
     end
     fl = minimum(floors) - 2 * r * sin(π / (2nθ))         # 1-Lipschitz arc-cover
-    return fl, (; floor = fl, radius = r, center = ComplexF64(center),
+    return fl,
+    (; floor = fl, radius = r, center = ComplexF64(center),
         γ = su.γ, R2 = R2max, σ11min = σ11min, σ22min = σ22min, G22norm = su.G22n,
         ntrigger = ntrig, certified = (fl > 0 && R2max < 1))
 end
@@ -607,19 +644,29 @@ export certify_leading_eigs_sing, pseudospectrum_outside
 function _singular_block(Amul, Aadj, n::Int, thresh::Real; kmax::Int = 256,
         v0 = randn(ComplexF64, n))
     Q = zeros(ComplexF64, n, kmax)
-    α = zeros(kmax); β = zeros(kmax)
-    q = ComplexF64.(v0); q ./= norm(q); Q[:, 1] = q
-    qp = zeros(ComplexF64, n); βp = 0.0; kact = kmax
+    α = zeros(kmax)
+    β = zeros(kmax)
+    q = ComplexF64.(v0)
+    q ./= norm(q)
+    Q[:, 1] = q
+    qp = zeros(ComplexF64, n)
+    βp = 0.0
+    kact = kmax
     thr2 = thresh^2                                               # work in θ = σ² units
-    maxm = 0; since = 0                                           # plateau tracker for #{σ ≥ thresh}
+    maxm = 0
+    since = 0                                           # plateau tracker for #{σ ≥ thresh}
     for j in 1:kmax
         w = ComplexF64.(Aadj(ComplexF64.(Amul(Q[:, j]))))         # A*A q  (two matvecs)
-        a = real(dot(Q[:, j], w)); α[j] = a
+        a = real(dot(Q[:, j], w))
+        α[j] = a
         w .-= a .* Q[:, j] .+ βp .* qp
         for _ in 1:2, i in 1:j                                    # full reorthogonalization
-            c = dot(Q[:, i], w); w .-= c .* Q[:, i]
+
+            c = dot(Q[:, i], w)
+            w .-= c .* Q[:, i]
         end
-        b = norm(w); β[j] = b
+        b = norm(w)
+        β[j] = b
         # Stop when the COUNT of Ritz values ≥ thresh plateaus — all σ ≥ thresh are captured. Robust
         # to the large A*A nullspace (its zero Ritz values are < thresh, so they never inflate the
         # count) — unlike a "converged value < thresh" test, which the nullspace triggers instantly.
@@ -629,7 +676,9 @@ function _singular_block(Amul, Aadj, n::Int, thresh::Real; kmax::Int = 256,
             (since >= 20 && j >= 2maxm + 10) && (kact = j; break)
         end
         (b < 1e-12 || j == kmax) && (kact = j; break)
-        Q[:, j + 1] = w ./ b; qp = Q[:, j]; βp = b
+        Q[:, j + 1] = w ./ b
+        qp = Q[:, j]
+        βp = b
     end
     F = eigen(SymTridiagonal(α[1:kact], β[1:(kact - 1)]))
     σ = sqrt.(max.(0.0, F.values))
@@ -663,7 +712,8 @@ function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig
         tighten::Bool = true, kmax::Int = 256, reorth::Bool = true)
     # 1. eigenvalue block — the good block to enclose
     Hg, Vg, βN = _arnoldi(Amul, n, min(nblock_eig, n - 2))
-    λg = eigvals(ComplexF64.(Hg)); ordg = sortperm(abs.(λg); rev = true)
+    λg = eigvals(ComplexF64.(Hg))
+    ordg = sortperm(abs.(λg); rev = true)
     λ_min_good = abs(λg[ordg[min(neig, length(ordg))]])
     # 2. singular block driven by the stopping scale: `Rcirc` FIXES a target circle and certifies
     # ALL eigenvalues with |λ| > Rcirc (deflate until ‖G₂₂‖ < Rcirc/2); else the leading `neig`
@@ -682,10 +732,13 @@ function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig
     Hc = ComplexF64.(G11)
     Hcp = prec == Float64 ? Hc : Complex{prec}.(G11)
     mr = _certify_block(Hc, refine)
-    λ = mr.centres; ord = sortperm(abs.(λ); rev = true)
+    λ = mr.centres
+    ord = sortperm(abs.(λ); rev = true)
     Winv = inv(mr.W)                                      # left eigenvectors (rows) — for κ(λᵢ)
-    # 5. deep far block ‖G₂₂‖ and coupling γ — computed ONCE (z-independent)
-    γ = _coupling_cert(Amul, Aadj, Qf)
+    # 5. deep far block ‖G₂₂‖ and coupling — computed ONCE (z-independent). The ASYMMETRIC pair
+    # (‖G12‖,‖G21‖) feeds the block-dominance sharpening in `_assemble2`; γ=max is the display value.
+    g12, g21 = _coupling_pair(Amul, Aadj, Qf)
+    γ = max(g12, g21)
     Pq(x) = x .- Qf * (Qf' * x)
     GtG(x) = Pq(ComplexF64.(Aadj(Pq(ComplexF64.(Amul(Pq(x)))))))
     Lg = lanczos_pro(GtG, n, min(40, n - 2); v0 = Pq(randn(ComplexF64, n)), reorth = reorth)
@@ -700,7 +753,8 @@ function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig
     results = NamedTuple[]
     for i in targets
         c = λ[i]
-        gap = minimum((abs(c - λ[j]) for j in eachindex(λ) if j != i); init = 2 * maximum(abs, λ))
+        gap = minimum((abs(c - λ[j]) for j in eachindex(λ) if j != i); init = 2 *
+                                                                              maximum(abs, λ))
         best = (; floor = -Inf, radius = 0.0, σ11 = 0.0, σ22 = 0.0)
         for fr in fracs
             r = fr * gap
@@ -709,7 +763,7 @@ function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig
             σ11 = Float64(_sigmin_circle(Hcp, c, r; ρfloor = ρfloor))  # svdbox in `prec`, Float64 out
             minz = abs(c) - r                                 # min |z| on the circle around c
             σ22 = G22n < minz ? minz - G22n : 0.0
-            fl = _assemble(σ11, σ22, γ)
+            fl = _assemble2(σ11, σ22, g12, g21)
             fl > best.floor && (best = (; floor = fl, radius = r, σ11, σ22))
         end
         # Enclosure of A's eigenvalue, in TWO steps: a cheap heuristic to find the SCALE, then ONE
@@ -719,7 +773,8 @@ function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig
         # circle until one pearl cover certifies floor>0: `σ_min(A−zI)>0` + count 1 ⇒ A's eigenvalue
         # lies inside — a rigorous enclosure `renc`, at ~1–3 pearl covers instead of 14 blind ones.
         κi = norm(@view mr.W[:, i]) * norm(@view Winv[i, :])
-        qi = Qf * mr.W[:, i]; qi ./= norm(qi)
+        qi = Qf * mr.W[:, i]
+        qi ./= norm(qi)
         r_heur = κi * norm(ComplexF64.(Amul(qi)) .- λ[i] .* qi)     # Bauer–Fike scale estimate
         renc = NaN
         if tighten && best.floor > 0 && R2g < 1
@@ -739,18 +794,22 @@ function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig
             r = clamp(3 * r, 1e-7 * max(abs(c), 1.0), best.radius)
             for _ in 1:10
                 σ11 = Float64(_sigmin_circle(Hcp, c, r; ρfloor = ρfloor))
-                minz = abs(c) - r; σ22 = G22n < minz ? minz - G22n : 0.0
-                (_assemble(σ11, σ22, γ) > 0) && (renc = r; break)
+                minz = abs(c) - r
+                σ22 = G22n < minz ? minz - G22n : 0.0
+                (_assemble2(σ11, σ22, g12, g21) > 0) && (renc = r; break)
                 r >= best.radius && break
                 r = min(3 * r, best.radius)
             end
         end
-        push!(results, (; λ = c, disc = mr.radii[i], cluster = 1,
-            cert = (; floor = best.floor, radius = best.radius, enclosure = renc, r_heur = r_heur,
-                center = ComplexF64(c), σ11min = best.σ11, σ22min = best.σ22, γ = γ, G22norm = G22n,
-                certified = best.floor > 0 && R2g < 1)))
+        push!(results,
+            (; λ = c, disc = mr.radii[i], cluster = 1,
+                cert = (; floor = best.floor, radius = best.radius,
+                    enclosure = renc, r_heur = r_heur,
+                    center = ComplexF64(c), σ11min = best.σ11, σ22min = best.σ22, γ = γ, G22norm = G22n,
+                    certified = best.floor > 0 && R2g < 1)))
     end
-    return (; mr, βN, results, V = Vg, U, Q = Qf, G11 = Hc, λ_min_good, G22norm = G22n, γ,
+    return (; mr, βN, results, V = Vg, U, Q = Qf, G11 = Hc,
+        λ_min_good, G22norm = G22n, γ, g12, g21,
         R2g, Rcirc, far_deep = (Rcirc === nothing || G22n < Rcirc),
         nsing = length(keep), dimQ = size(Qf, 2), Hritz = λ[ord])
 end
@@ -769,7 +828,7 @@ function pseudospectrum_outside(out, z::Number)
     r <= out.G22norm && return 0.0
     σ11 = _sigma_min_cert(out.G11 - z * I)
     σ22 = r - out.G22norm
-    return (out.R2g < 1) ? _assemble(σ11, σ22, out.γ) : 0.0
+    return (out.R2g < 1) ? _assemble2(σ11, σ22, out.g12, out.g21) : 0.0
 end
 
 function certify_leading_eigs_sing(A::AbstractMatrix; kwargs...)
@@ -885,7 +944,8 @@ function certify_gap_locked(Amul, Aadj, n::Int; nsep::Int = 5, nblock::Int = 256
     isempty(kk) && (kk = [ord[min(nsep + 1, length(ord))]])   # at least the first inside eigenvalue
     W = _frame(V * mr.W[:, kk])                                # lifted near-circle frame (the lock)
     Hk = _captured_block(Amul, W)                              # H_kk = W*AW (small, well conditioned)
-    γ = _coupling_cert(Amul, Aadj, W)
+    g12, g21 = _coupling_pair(Amul, Aadj, W)
+    γ = max(g12, g21)
     floors = Float64[]
     R2max = 0.0
     σ11min = Inf
@@ -898,7 +958,7 @@ function certify_gap_locked(Amul, Aadj, n::Int; nsep::Int = 5, nblock::Int = 256
         R2max = max(R2max, info.R2)
         σ11min = min(σ11min, σ11)
         σ22min = min(σ22min, σ22)
-        push!(floors, R2max < 1 ? _assemble(σ11, σ22, γ) : 0.0)
+        push!(floors, R2max < 1 ? _assemble2(σ11, σ22, g12, g21) : 0.0)
     end
     fl = minimum(floors) - 2 * r * sin(π / (2nθ))
     return fl,
