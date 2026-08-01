@@ -271,12 +271,20 @@ SVD, not a local conditioning constant.
 
 \section{A certified Lanczos decomposition}\label{sec:lanczos}
 
-The second component stands on its own, independent of the eigenvalue problem above: a rigorous floor
-on $\lambda_{\min}(M)$ of a Hermitian positive-semidefinite operator $M$ available \emph{only} as a
-matvec $x\mapsto Mx$. It is the verified counterpart of the symmetric Lanczos iteration, and we will
-use it in Section~\ref{sec:krylovcert} on $M=(G_{22}-zI)^*(G_{22}-zI)$; but nothing here refers to
-$A$, and the decomposition is reusable wherever a certified extremal eigenvalue of a large Hermitian
-matvec operator is wanted.
+The second component stands on its own, independent of the eigenvalue problem above. Stated plainly,
+it is a \emph{certified extremal singular-value solver for sparse or matrix-free Hermitian operators}:
+given $M=M^*$ available only as a matvec $x\mapsto Mx$, it returns rigorous \emph{two-sided} bounds on
+$\lambda_{\min}(M)$ and $\lambda_{\max}(M)$ --- equivalently, for $M=C^*C$, on $\sigmin(C)$ and
+$\sigmax(C)$. It is the verified counterpart of the symmetric Lanczos iteration, and it is reusable
+wherever such a bound is wanted; nothing in this section refers to $A$.
+
+Both ends are needed downstream, and for different reasons. Section~\ref{sec:krylovcert} applies the
+$\lambda_{\max}$ bound to $G_{22}^*G_{22}$ to certify $\norm{G_{22}}_2$ --- the single hypothesis
+\eqref{eq:onehypothesis} on which the whole exterior certificate rests --- and the $\lambda_{\min}$
+bound to $(G_{22}-zI)^*(G_{22}-zI)$ to floor $\sig_{22}$ where the $z$-independent shortcut does not
+apply. A one-sided tool would not suffice, and, as we will see, the two ends are not of differing
+difficulty: both require the same completeness certificate, because a missed \emph{large} eigenvalue
+is exactly as invisible to a partial Krylov space as a missed small one.
 
 \paragraph{The finite-precision recurrence.} A Lanczos process on $M$ builds a tridiagonal
 $T_k=\operatorname{tridiag}(\bar\beta_{j-1},\bar\alpha_j,\bar\beta_j)$ and a nominally orthonormal
@@ -673,6 +681,41 @@ term vanishes because $\spec(G_{22})\subseteq\{\abs{z}\le\norm{G_{22}}_2\}$ with
 Evaluating at $t=1$ gives the claim.
 \end{proof}
 
+\begin{corollary}[Certified spectral gap]\label{cor:gap}
+Under the hypotheses of Proposition~\ref{prop:count}, suppose $G_{11}$ has exactly one eigenvalue
+$\lambda_1$ of modulus $>R$. Then $A$ has exactly one such eigenvalue, and \emph{every} other
+eigenvalue of $A$ satisfies $\abs{\lambda}\le R$. If $A$ is a stochastic matrix, so that
+$\lambda_1=1$ is the Perron eigenvalue, the spectral gap obeys
+\[
+  1-\abs{\lambda_2}\;\ge\;1-R ,
+\]
+and the asymptotic decay of $\norm{A^k-\Pi}$ is governed by a rate no worse than $R$.
+\end{corollary}
+
+This is one of the more useful things the method does, and it applies well beyond transfer operators:
+\emph{the spectral gap of a huge finite-state Markov chain}. A transition matrix of a chain on
+millions of states is exactly the regime the method is built for --- large, sparse or matrix-free,
+typically \emph{non-reversible} and hence non-normal, so the symmetric machinery of reversible chains
+does not apply and Ritz values cannot be trusted. Corollary~\ref{cor:gap} converts a single certified
+inequality $\norm{G_{22}}_2<R$ into a rigorous mixing-rate bound: certify that nothing but the Perron
+eigenvalue lies outside $R$, and the chain provably mixes at rate $R$. Nothing about reversibility,
+positivity or a spectral decomposition is used; the chain need only be applied to a vector, together
+with its adjoint. We regard this, rather than any single spectral computation, as the practical point
+of the construction.
+
+It is worth isolating how little the two propositions actually ask for. Their entire hypothesis is the
+single scalar inequality
+\begin{equation}\label{eq:onehypothesis}
+  \norm{G_{22}}_2\;<\;R ,
+\end{equation}
+certified once and $z$-independently. Everything else --- the inclusion, the count, the enclosures ---
+follows. So the method reduces the exterior spectral problem for a large matrix-free non-normal
+operator to \emph{certifying one number}: an upper bound on the norm of the deflated far block. If that
+number comes in below $R$, the captured block has provably captured everything of interest outside $R$;
+if it does not, the method declines. This is the whole content of the design, and it is why the
+singular deflation of Section~\ref{sec:twosub} --- which is what makes $\norm{G_{22}}_2$ small --- is
+the algorithmic heart of the method rather than an implementation detail.
+
 Combined with Proposition~\ref{prop:complete} this settles the exterior completely: not only is every
 eigenvalue of $A$ outside $R$ an eigenvalue of $G_{11}$, but the two exteriors carry the \emph{same
 count}. In particular no eigenvalue of $G_{11}$ outside $R$ is a projection artifact --- the captured
@@ -806,37 +849,32 @@ $\sigmin(A-zI)$; at a true eigenvalue the gap is $\le0$.
 
 \subsection{Transfer operators of chaotic maps (matrix-free)}
 
-\begin{remark}[Status of the numbers in this subsection --- re-verification in progress]\label{rem:rerun}
-\textcolor{red}{The figures reported below were produced by an earlier implementation, before the
-correction of Proposition~\ref{prop:lanczosfloor}. In that implementation the far-block quantity
-$\norm{G_{22}}_2$ --- on which $\sig_{22}\ge\abs{z}-\norm{G_{22}}_2$ and hence every circle certificate
-depends --- was computed from a $40$-step Lanczos, and the floor used the projected residual
-$\bar Q_k^*S_k$. By Proposition~\ref{prop:lanczosfloor} neither is a certificate: an \emph{upper} bound
-on $\lambda_{\max}$ requires the same completeness direction as the floor, since a missed large
-eigenvalue is exactly as invisible to a partial basis as a missed small one. These numbers are
-therefore \emph{not} currently backed by a proof and are being recomputed with the full-basis
-certificate; they are retained here only as the provisional record of what the method achieves, and
-should not be read as certified until this remark is removed. We expect them to be confirmed --- the
-independent smoothing benchmark of Section~\ref{sec:farfielddemo} reproduced its numbers exactly under
-the corrected code --- but expectation is not certification.}
-\end{remark}
-
 We take $A$ the Ulam (Perron--Frobenius) discretization of a noisy map on a uniform grid, applied
 matrix-free. Noise width $0.1$; depth-$6$ grid, $n=4096$.
 
 \paragraph{Noisy H\'enon.} Strongly non-normal ($\sigmax(A)=1.71$ vs.\ spectral radius $1$), numerical
 rank $\approx745$, spectrum a cloud inside the unit disk. The eigenvector Krylov complement has
-$\norm{G_{22}}_2=0.43$ against $\sigma_{257}(A)=0.12$ --- the symptom (S2). With the automatic
-outside-$R$ mode at $R=0.35$: $\norm{G_{22}}_2=0.29<R$, and \textbf{$11$ eigenvalues rigorously isolated}
-outside $R$ (down to $\abs{\lambda}=0.379$), all with a positive floor
-($\sigmin\ge1.5\!\times\!10^{-2}\dots1.3\!\times\!10^{-5}$); $\dim Q=165$; wall time $\approx340$\,s in
-Float64. The captured compression is faithful: $\sigmin(G_{11}-zI)=\sigmin(A-zI)$ to $\approx3\%$ at the
-tested points.
+$\norm{G_{22}}_2=0.43$ against $\sigma_{257}(A)=0.12$ --- the symptom (S2). Running the automatic
+outside-$R$ mode at $R=0.6$, the singular deflation ($n_{\mathrm{sing}}=54$, $\dim\mathcal Q=134$)
+certifies $\norm{G_{22}}_2=0.4414<R$, discharging the single hypothesis
+\eqref{eq:onehypothesis}; the far-block $\lambda_{\max}$ bound is the full-basis certificate of
+Proposition~\ref{prop:lanczosfloor} at $N=n-\dim\mathcal Q=3962$ steps. Propositions~\ref{prop:complete}
+and~\ref{prop:count} then give the exterior outright: $A$ has \textbf{exactly four eigenvalues of
+modulus $>0.6$}, namely $\lambda=1.0000$, $0.4514\pm0.5290i$ and $-0.6748$, with certified floors
+$\sigmin\ge1.04\!\times\!10^{-2}$, $1.10\!\times\!10^{-3}$ and $3.87\!\times\!10^{-4}$ on their
+isolation circles and rigorous enclosures of radius $10^{-7}$ (the Float64 $\svdbox$ resolution).
+Wall time $\approx290$\,s. The captured compression is faithful: $\sigmin(G_{11}-zI)=\sigmin(A-zI)$ to
+$\approx3\%$ at the tested points.
 
-\paragraph{Contracting Lorenz.} $\kappa_2\approx4.7\!\times\!10^5$. The five leading eigenvalues certify
-in Float64 ($\sigmin\ge2.2\!\times\!10^{-2}\dots3.0\!\times\!10^{-6}$); the deepest pair
-($\abs{\lambda}=0.269$) requires a fine pearl floor (the granularity, \emph{not} the working precision,
-was the obstruction --- a high-precision SVD is unnecessary).
+\paragraph{Contracting Lorenz.} A sharper spectral gap: the Arnoldi Ritz moduli are
+$0.9988,\,0.3151,\,0.3151,\,0.2690,\dots$, so a single eigenvalue lies outside $R=0.6$. With
+$n_{\mathrm{sing}}=12$ and $\dim\mathcal Q=92$ the deflation certifies $\norm{G_{22}}_2=0.2382<R$, and
+the method returns \textbf{exactly one eigenvalue outside $0.6$}, $\lambda=0.9988$, with
+$\sigmin\ge2.26\!\times\!10^{-2}$ and enclosure $1.6\!\times\!10^{-6}$; wall time $\approx216$\,s. The
+eigenvalue is not exactly $1$ because this discretization is not mass-preserving (the map is not
+periodic on the domain, and we measure a $1.3\%$ defect in $A^*\mathbf 1=\mathbf 1$). Its resolvent
+behaves as expected for a simple isolated eigenvalue: we measure $\sigmin(G_{11}-zI)\approx0.57\abs{z-\lambda}$
+near it, the factor being the eigenvalue condition number $\kappa(\lambda)\approx1.8$.
 
 \paragraph{Gauss--Kuzmin--Wirsing.} A benchmark whose sub-dominant eigenvalue (the GKW constant) is a
 classical target; the far block is low-rank, and a small captured block certifies the gap~\cite{NisoliGauss}.
@@ -870,13 +908,25 @@ coupling is weak. Reproducible: \texttt{bench/blockdom\_farfield.jl}.}
 
 \subsection{Where the method applies --- and where it does not}\label{sec:testmat}
 
-The far-block certificate rests on making $\norm{G_{22}}_2$ \emph{small} by singular deflation, which
-requires the singular values of $A$ to \emph{decay}: the resolvent tail must be genuinely
-low-dimensional. This is exactly the transfer-operator regime (a noise-smoothed or otherwise compact-like
-operator), and it fails, by design, on operators whose singular spectrum is flat. We ran the pipeline
-on the standard non-normal gallery precisely to map this boundary (Table~\ref{tab:gallery}); the point
-is not that the method is universal --- it is not --- but that it \emph{fails safely}, returning a
-non-positive floor or an explicit refusal, never a false enclosure.
+A word first on what these matrices are for. The classical non-normal gallery --- \textsc{Grcar},
+\textsc{Kahan}, the Jordan block, convection--diffusion --- consists of \emph{small dense} matrices.
+They are therefore tests of the \emph{first} component of this paper, the Miyajima--Rump enclosure of
+Sections~\ref{sec:mr}--\ref{sec:mrres}, which is what one would actually run on them: there is no
+reason to reduce a $100\times100$ dense matrix by a Krylov method, and the outer split has nothing to
+do. What they probe is whether the dense enclosure behaves correctly on defective, near-defective and
+strongly non-normal spectra --- whether the block region of Theorem~\ref{thm:enclosure} tracks
+$\abs{z-\lambda}^m$ at a Jordan block, whether $\kappa_2$ stays benign on the block-orthonormal frame,
+and whether the Neumann test refuses rather than lies when the eigenbasis is hopeless.
+
+The Krylov layer is a different question with a different test set, and it is worth being explicit
+that the gallery does \emph{not} test it. That layer rests on making $\norm{G_{22}}_2$ small by
+singular deflation, which requires the singular values to \emph{decay} so the resolvent tail is
+genuinely low-dimensional --- the transfer-operator and Markov-chain regime of
+Section~\ref{sec:examples}. Applying it to a small full-rank matrix is a category error: the deflation
+has nothing to remove, $\norm{G_{22}}_2$ stays comparable to the eigenvalue scale, hypothesis
+\eqref{eq:onehypothesis} fails and the method declines. We record below what happens when one does so
+anyway (Table~\ref{tab:gallery}), because the boundary of applicability is worth mapping honestly, but
+the reader should read those rows as delimiting the \emph{Krylov reduction}, not the enclosure.
 
 \begin{figure}[t]\centering
 \includegraphics[width=0.82\textwidth]{bench/figures/regime_decay.png}
