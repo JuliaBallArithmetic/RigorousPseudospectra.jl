@@ -59,8 +59,15 @@ the far block shallow in operator norm --- and that augmenting the captured subs
 singular vectors, obtained from a Lanczos process on $A^*A$, makes the far block \emph{deep}: the
 certified-Lanczos floor then converges with a well-separated bottom. The captured compression is
 \emph{faithful} ($\sigmin(G_{11}-zI)\approx\sigmin(A-zI)$), so its verified SVD is $\kappa_2$-free.
-Circles are rigorously covered by an adaptive pearl cover, and each eigenvalue is rigorously enclosed
-by a cheap probe that locates the scale followed by a single verified check. We report rigorous
+The central conclusion is a \emph{pseudospectral inclusion}: once the deflation has made the far block
+deep relative to a chosen radius $R$, the $\delta$-pseudospectrum of $A$ outside $R$ is contained in
+the $\varepsilon$-pseudospectrum of the small captured block, with an explicit relation between
+$\varepsilon$ and $\delta$. A single inequality, valid at every $z$ simultaneously, thus transfers the
+entire exterior spectral behaviour of a large matrix-free operator onto a small dense matrix one can
+factor; in the limit $\varepsilon\to0$ it says that the eigenvalues found outside $R$ are \emph{all} of
+them, with no grid, no covering argument and no a-priori bound on the spectral radius. Circles are
+rigorously covered by an adaptive pearl cover, and each eigenvalue is rigorously enclosed by a cheap
+probe that locates the scale followed by a single verified check. We report rigorous
 enclosures for the Perron--Frobenius (Ulam) operators of the noisy H\'enon and contracting-Lorenz maps
 and the Gauss--Kuzmin--Wirsing operator, and we map the method's applicability on a gallery of standard
 non-normal matrices: it succeeds precisely when the singular spectrum decays (a low-dimensional
@@ -112,7 +119,21 @@ Hermitian matvec operator; it is useful independently of what follows, and it co
 delimitation of what a Krylov space can and cannot certify (Proposition~\ref{prop:lanczosfloor}).
 The one hypothesis of (ii) --- certified extremal eigenvalues of the small tridiagonal $T_N$ --- is
 discharged without any verified eigensolver at all, by a rigorous Cholesky/inertia definiteness test
-costing $O(N)$ (Remark~\ref{rem:sturm}). \textbf{(iii)} We \emph{join} the two
+costing $O(N)$ (Remark~\ref{rem:sturm}).
+
+The payoff of the join, and the main theorem of the paper, is Proposition~\ref{prop:complete}: for a
+radius $R$ exceeding the depth $\norm{G_{22}}_2$ of the far block,
+\[
+  \Lambda_{\delta(\varepsilon)}(A)\cap\{\abs{z}>R\}\;\subseteq\;\Lambda_{\varepsilon}(G_{11})\cap\{\abs{z}>R\},
+  \qquad
+  \delta(\varepsilon)=\frac{\varepsilon\,(R-\norm{G_{22}}_2)}{\varepsilon+(R-\norm{G_{22}}_2)+\gamma},
+\]
+so the whole exterior pseudospectral structure of the large operator is controlled by that of a small
+dense block. This is the sense in which the method is a \emph{pseudospectral} rather than merely an
+eigenvalue algorithm. A homotopy in the coupling then upgrades the inclusion to an exact count
+(Proposition~\ref{prop:count}): $A$ and $G_{11}$ have the \emph{same number} of eigenvalues outside
+$R$, so the certified list is complete in both directions --- nothing of $A$ is missed, and nothing
+listed is a projection artifact --- rather than being whatever the iteration happened to find. \textbf{(iii)} We \emph{join} the two
 (Sections~\ref{sec:krylov}--\ref{sec:krylovcert}): a Krylov reduction certifies the eigenvalue
 \emph{block} with (i) and floors the matrix-free \emph{far} block with (ii), the far block made deep
 by deflating the top \emph{singular} directions of $A$ --- obtained by a Lanczos on $A^*A$ --- in
@@ -599,6 +620,99 @@ null space of $A^*A$ (numerical rank $\ll n$) cannot inflate. Every eigenvalue w
 is then captured and certifiable, automatically: no guess of ``how many'' is needed. The former
 three-block picture (good/bad/ugly) collapses to \emph{captured-good $+$ deep-far}: the ``bad''
 near-circle eigenvalues no longer need a separate block, because the deep far block absorbs them.
+
+Writing $\Lambda_\varepsilon(M)=\{z:\sigmin(M-zI)\le\varepsilon\}$ for the $\varepsilon$-pseudospectrum,
+the assembly delivers something considerably stronger than a statement about eigenvalues: outside $R$,
+the \emph{pseudospectrum} of $A$ is trapped inside a pseudospectrum of the small captured block.
+
+\begin{proposition}[Pseudospectral inclusion outside $R$]\label{prop:complete}
+Fix $R$ with $\norm{G_{22}}_2<R$ and put $\sig_{22}^-:=R-\norm{G_{22}}_2>0$. For $\varepsilon\ge0$ set
+\[
+  \delta(\varepsilon)\;:=\;\frac{\varepsilon\,\sig_{22}^-}{\varepsilon+\sig_{22}^-+\gamma}\;.
+\]
+Then
+\[
+  \Lambda_{\delta(\varepsilon)}(A)\cap\{\abs{z}>R\}\;\subseteq\;\Lambda_{\varepsilon}(G_{11})\cap\{\abs{z}>R\}.
+\]
+In particular, taking $\varepsilon=0$, $\ \spec(A)\cap\{\abs{z}>R\}\subseteq\spec(G_{11})\cap\{\abs{z}>R\}$:
+if the verified block diagonalization of $G_{11}$ finds exactly $k$ eigenvalues of modulus $>R$, then
+$A$ has \emph{no others} outside $R$.
+\end{proposition}
+\begin{proof}
+Let $\abs{z}>R$ with $z\notin\Lambda_\varepsilon(G_{11})$, i.e.\ $\sig_{11}=\sigmin(G_{11}-zI)>\varepsilon$.
+By \eqref{eq:farshort}, $\sig_{22}\ge\abs{z}-\norm{G_{22}}_2>\sig_{22}^-$. The right-hand side of
+\eqref{eq:assembly} is increasing in each of $\sig_{11},\sig_{22}$, so
+$\sigmin(A-zI)\ge\sig_{11}\sig_{22}/(\sig_{11}+\sig_{22}+\gamma)>\delta(\varepsilon)$, i.e.\
+$z\notin\Lambda_{\delta(\varepsilon)}(A)$. The contrapositive is the claim; $\varepsilon=0$ gives the
+spectral statement.
+\end{proof}
+
+The inclusion is only half of the story; a homotopy upgrades it to an exact \emph{count}.
+
+\begin{proposition}[Exact exterior count]\label{prop:count}
+Assume $\norm{G_{22}}_2<R$ and that the assembly floor is positive on the circle $\abs{z}=R$, i.e.
+$\sigmin(G_{11}-zI)>0$ there. Then $A$ and $G_{11}$ have the \emph{same number} of eigenvalues, counted
+with algebraic multiplicity, in $\{\abs{z}>R\}$.
+\end{proposition}
+\begin{proof}
+For $t\in[0,1]$ set $A_t=\big(\begin{smallmatrix}G_{11}&tG_{12}\\ tG_{21}&G_{22}\end{smallmatrix}\big)$,
+so $A_1=A$ and $A_0=G_{11}\oplus G_{22}$. The coupling of $A_t$ is $t\gamma\le\gamma$, and the
+right-hand side of \eqref{eq:assembly} is decreasing in the coupling, so for every $t$ and every $z$
+with $\abs{z}=R$,
+\[
+  \sigmin(A_t-zI)\;\ge\;\frac{\sig_{11}\sig_{22}}{\sig_{11}+\sig_{22}+t\gamma}
+  \;\ge\;\frac{\sig_{11}\sig_{22}}{\sig_{11}+\sig_{22}+\gamma}\;>\;0,
+\]
+using $\sig_{22}\ge R-\norm{G_{22}}_2>0$ and the hypothesis $\sig_{11}>0$. Thus $A_t-zI$ is
+nonsingular on the circle for all $t$: no eigenvalue of $A_t$ meets $\abs{z}=R$. Since the eigenvalues
+of $A_t$ depend continuously on $t$ (they are the roots of a polynomial whose coefficients are
+polynomial in $t$), the number lying in $\{\abs{z}>R\}$ is a continuous integer-valued function of
+$t$, hence constant. At $t=0$ that number is
+$\#\big(\spec(G_{11})\cap\{\abs{z}>R\}\big)+\#\big(\spec(G_{22})\cap\{\abs{z}>R\}\big)$, and the second
+term vanishes because $\spec(G_{22})\subseteq\{\abs{z}\le\norm{G_{22}}_2\}$ with $\norm{G_{22}}_2<R$.
+Evaluating at $t=1$ gives the claim.
+\end{proof}
+
+Combined with Proposition~\ref{prop:complete} this settles the exterior completely: not only is every
+eigenvalue of $A$ outside $R$ an eigenvalue of $G_{11}$, but the two exteriors carry the \emph{same
+count}. In particular no eigenvalue of $G_{11}$ outside $R$ is a projection artifact --- the captured
+subspace mixes near-invariant Arnoldi directions with $A^*A$-Lanczos directions chosen only to deepen
+the far block, and one might worry that compressing onto the latter manufactures spurious eigenvalues,
+but the count shows that whatever such artifacts exist must lie in the bulk $\abs{z}<R$. Applying the
+same homotopy to any smaller contour on which the floor is positive transfers the count there too, so
+each certified circle of Section~\ref{sec:enclose} encloses exactly as many eigenvalues of $A$ as of
+$G_{11}$.
+
+This is what the outside-$R$ construction is \emph{for}. The assembly \eqref{eq:assembly} is an
+inequality valid at \emph{every} $z$ simultaneously, so once the deflation has made the far block deep
+enough that $\sig_{22}>0$ on the whole exterior, the captured block \emph{controls the entire exterior}
+--- not merely the eigenvalues, but every pseudospectral level set. No grid, no covering argument and
+no a-priori bound on the spectral radius is required; the exterior is disposed of in one stroke, and
+the quantitative version is exactly the rigorous pseudospectrum we plot in
+Section~\ref{sec:examples}. Combined with the enclosures of Section~\ref{sec:enclose}, the output is a
+\emph{complete} certified description of $\spec(A)$ outside $R$: a finite list of discs provably
+containing every eigenvalue of modulus exceeding $R$, and nothing else. The distinction matters in
+practice, since $\sig_{11}$ is itself only known through a verified enclosure: what one certifies at
+finite precision is the inclusion at the resolution $\varepsilon$ that the verified SVD of $G_{11}$
+attains, and Proposition~\ref{prop:complete} says precisely what that resolution buys. Choosing $R$
+larger costs eigenvalues but buys margin, since $\sig_{22}^-=R-\norm{G_{22}}_2$ grows; this is the
+practical tuning knob of the method.
+
+The inclusion is one-directional, and it is worth being exact about what that does and does not
+assert. Nothing outside $R$ is \emph{missed}. It is not asserted that every eigenvalue of $G_{11}$
+outside $R$ is an eigenvalue of $A$: the captured subspace mixes near-invariant Arnoldi directions
+with $A^*A$-Lanczos directions included to deepen the far block, and compressing onto the latter can
+in principle manufacture eigenvalues of $G_{11}$ that are artifacts of the projection. Should one wish
+to confirm an individual candidate, the coupling supplies a $\kappa$-free converse: if
+$G_{11}w=\lambda w$ with $\norm{w}=1$ and $q=Xw$, then $Aq-\lambda q=G_{21}w$, and since
+$\sigmin(M)\le\norm{Mq}$ for unit $q$,
+\begin{equation}\label{eq:eta}
+  \sigmin(A-\lambda I)\;\le\;\norm{G_{21}w},
+\end{equation}
+placing $\lambda$ in that pseudospectral level set of $A$. In the transfer-operator examples of
+Section~\ref{sec:examples} the question does not arise: the eigenvalues of $G_{11}$ outside $R$
+coincide with the converged Arnoldi values, the projection artifacts falling well inside the bulk
+$\abs{z}<R$.
 
 \paragraph{Faithfulness --- a statement about sharpness, not about validity.} Two things must be kept
 apart here. That $\sig_{11}=\svdbox(G_{11}-zI)$ is a rigorous enclosure of $\sigmin(G_{11}-zI)$, and is

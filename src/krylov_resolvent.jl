@@ -969,7 +969,16 @@ function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig
     mr = _certify_block(Hc, refine)
     λ = mr.centres
     ord = sortperm(abs.(λ); rev = true)
-    Winv = inv(mr.W)                                      # left eigenvectors (rows) — for κ(λᵢ)
+    # EIGENVECTORS for the Bauer–Fike scale heuristic. NOTE: `mr.W` is the block-orthonormal
+    # SCHUR+Newton frame of the VBD — its columns span invariant subspaces but are SCHUR vectors,
+    # NOT eigenvectors (only the leading one is). Using `mr.W[:,i]` here silently produced an
+    # O(1) residual for any target that is not first (measured 0.42 for the Lorenz λ≈1 sitting at
+    # index 21, against 2e-15 for the true eigenvector), inflating `r_heur` and hence the reported
+    # enclosure by orders of magnitude. Soundness was never affected — the enclosure is decided by
+    # the rigorous pearl cover, `r_heur` only says WHERE to look — but the tightness was ruined.
+    # The block is small, so we take genuine eigenvectors and the true eigenvalue condition number.
+    FH = eigen(Hc)
+    FHinv = inv(FH.vectors)                               # rows = left eigenvectors
     # 5. deep far block ‖G₂₂‖ and coupling — computed ONCE (z-independent). The ASYMMETRIC pair
     # (‖G12‖,‖G21‖) feeds the block-dominance sharpening in `_assemble2`; γ=max is the display value.
     g12, g21 = _coupling_pair(Amul, Aadj, Qf)
@@ -1008,8 +1017,10 @@ function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig
         # eigenvector `Q·W[:,i]` against A (one matvec). (2) starting a few × `r_heur`, GROW the
         # circle until one pearl cover certifies floor>0: `σ_min(A−zI)>0` + count 1 ⇒ A's eigenvalue
         # lies inside — a rigorous enclosure `renc`, at ~1–3 pearl covers instead of 14 blind ones.
-        κi = norm(@view mr.W[:, i]) * norm(@view Winv[i, :])
-        qi = Qf * mr.W[:, i]
+        jj = argmin(abs.(FH.values .- λ[i]))                        # the block eigenpair for λᵢ
+        xv = @view FH.vectors[:, jj]
+        κi = norm(xv) * norm(@view FHinv[jj, :])                    # eigenvalue condition number
+        qi = Qf * xv
         qi ./= norm(qi)
         r_heur = κi * norm(ComplexF64.(Amul(qi)) .- λ[i] .* qi)     # Bauer–Fike scale estimate
         renc = NaN
