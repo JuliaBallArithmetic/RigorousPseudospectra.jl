@@ -51,3 +51,27 @@ Extended precision settles it (pipeline is generic in the float type):
   512 bits: certifies r=1.0, 0.1, 0.01 → σ_min ≥ 3.9e-39, 4.7e-47, 9.2e-57
 The three values drop ~10 decades per decade of r: the |z−λ|^m law of Thm 1 for the m=10 Jordan
 block, OBSERVED. Demmel is now an illustration of the block region, not a failure. Paper updated.
+
+### Matrix Market NEP (bench/matrixmarket.jl) — real sparse non-normal operators
+
+R = √(|λ1||λ2|), so a successful run certifies a spectral gap. Tolosa is NOT served at any
+pub/MatrixMarket2/NEP/tolosa/... path (all 404); olmstead, brussel (rdb), dwave, airfoil are.
+
+  rdb200   n=200  σ50/σ1=0.59  ‖A‖/ρ=1.04  ‖G22‖=28.7 < 32.9 ✓  → CERTIFIED GAP |λ2/λ1| ≤ 0.986
+  olm500   n=500  σ50/σ1=0.91  ‖A‖/ρ=9.09  ‖G22‖=2190 < 2544 ✓  → 5 certified (dimQ=279 of 500!)
+  rdb800l  n=800  σ50/σ1=0.85  ‖A‖/ρ=1.05  ‖G22‖=27.7 < 30.9 ✓  → 3 certified
+  olm1000  n=1000 σ50/σ1=0.98  ‖A‖/ρ=9.06  ‖G22‖=91955 > 10163 ✗ → DECLINES (hypothesis fails)
+
+SHARPENS THE REGIME CLAIM: rdb200 certifies with σ50/σ1=0.59 (almost no decay), olm1000 fails with
+a similar profile. The predictor is not raw singular decay but ‖A‖/ρ(A) — the departure from
+normality. rdb: ratio ≈1.05, small dimQ (93/200, 127/800). Olmstead: ratio ≈9; olm500 only succeeds
+by capturing 279 of 500 dims (brute force), olm1000 cannot. Honest boundary = "‖G22‖ < R after an
+affordable deflation", not "singular values decay".
+
+### Test suite GREEN
+
+test/runtests.jl now passes fully (was 5 pass / 8 fail all session). The failing test asserted that
+certify_leading_eigs isolates 4 eigenvalues of a matrix whose spectrum is 1.000, 0.794, 0.757, 0.753,
+0.734 — a tight cloud with ~4e-3 gaps that CANNOT be isolated. Rewritten to assert what is actually
+guaranteed: the dominant (separated) eigenvalue certifies, and SOUNDNESS (floor ≤ true σ_min) holds
+for every result whether or not it certifies. nblock 16 → 80 (at 16 the certified ‖G22‖=0.94 > |λ2|).
