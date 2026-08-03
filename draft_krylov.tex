@@ -856,7 +856,7 @@ matrix-free. Noise width $0.1$; depth-$6$ grid, $n=4096$.
 rank $\approx745$, spectrum a cloud inside the unit disk. The eigenvector Krylov complement has
 $\norm{G_{22}}_2=0.43$ against $\sigma_{257}(A)=0.12$ --- the symptom (S2). Running the automatic
 outside-$R$ mode at $R=0.6$, the singular deflation ($n_{\mathrm{sing}}=54$, $\dim\mathcal Q=134$)
-certifies $\norm{G_{22}}_2=0.4414<R$, discharging the single hypothesis
+certifies $\norm{G_{22}}_2=0.445<R$, discharging the single hypothesis
 \eqref{eq:onehypothesis}; the far-block $\lambda_{\max}$ bound is the full-basis certificate of
 Proposition~\ref{prop:lanczosfloor} at $N=n-\dim\mathcal Q=3962$ steps. Propositions~\ref{prop:complete}
 and~\ref{prop:count} then give the exterior outright: $A$ has \textbf{exactly four eigenvalues of
@@ -868,9 +868,9 @@ $\approx3\%$ at the tested points.
 
 \paragraph{Contracting Lorenz.} A sharper spectral gap: the Arnoldi Ritz moduli are
 $0.9988,\,0.3151,\,0.3151,\,0.2690,\dots$, so a single eigenvalue lies outside $R=0.6$. With
-$n_{\mathrm{sing}}=12$ and $\dim\mathcal Q=92$ the deflation certifies $\norm{G_{22}}_2=0.2382<R$, and
+$n_{\mathrm{sing}}=12$ and $\dim\mathcal Q=92$ the deflation certifies $\norm{G_{22}}_2=0.234<R$, and
 the method returns \textbf{exactly one eigenvalue outside $0.6$}, $\lambda=0.9988$, with
-$\sigmin\ge2.26\!\times\!10^{-2}$ and enclosure $1.6\!\times\!10^{-6}$; wall time $\approx216$\,s. The
+$\sigmin\ge2.27\!\times\!10^{-2}$ and enclosure $10^{-7}$; wall time $\approx212$\,s. The
 eigenvalue is not exactly $1$ because this discretization is not mass-preserving (the map is not
 periodic on the domain, and we measure a $1.3\%$ defect in $A^*\mathbf 1=\mathbf 1$). Its resolvent
 behaves as expected for a simple isolated eigenvalue: we measure $\sigmin(G_{11}-zI)\approx0.57\abs{z-\lambda}$
@@ -938,36 +938,69 @@ fails safely.}
 \label{fig:regime}
 \end{figure}
 
-\paragraph{Full singular spectrum: Grcar and convection--diffusion (fail safely).} \textsc{Grcar}
-(banded Toeplitz: $-1$ subdiagonal, $+1$ on the diagonal and next three superdiagonals~\cite{Trefethen1992})
-and the convection--diffusion operator $-\varepsilon u''+u'$~\cite{ReddyTrefethen1994} are strongly
-non-normal but \emph{full-rank}: their singular values do not decay. Deflating tens of singular
-directions leaves $\norm{G_{22}}_2$ comparable to the eigenvalue scale ($2.02$ against $\abs{\lambda}\approx2.26$
-for Grcar $n=100$; $491$ against $\abs{\lambda}\approx800$ for the discretized operator), so the far
-block is never deep and \eqref{eq:assembly} yields a floor of $0$: the method reports every eigenvalue
-$\times$ (uncertified) rather than a spurious positive. These are the correct negatives that delimit the
-regime.
+\paragraph{Separation, where it is possible and where it is not.} The candidate similarity may be
+built from the eigenvector matrix or from the Schur vectors, and neither dominates; the
+implementation races the candidates and keeps the best certified one. The gallery shows both regimes.
+For \textsc{Kahan} and the convection--diffusion operator the eigenbasis, though ill-conditioned
+($\operatorname{cond}(V)\approx10^{13}$ and $10^{11}$), is still usable at working precision, and the
+enclosure separates the spectrum completely: $60$ and $80$ \emph{singleton} clusters with radii below
+$1.4\times10^{-8}$ and $1.7\times10^{-2}$. For \textsc{Grcar} the eigenvector basis is
+\emph{exponentially} ill-conditioned in $n$ --- we measure
+$\operatorname{cond}(V)=6.9\cdot10^{2},\,2.8\cdot10^{6},\,1.5\cdot10^{10},\,5.1\cdot10^{17}$ at
+$n=20,40,60,100$ --- and at $n=100$ this exceeds $1/u\approx4.5\cdot10^{15}$, so no eigenvector frame
+is admissible: the computed $V$ is singular to working precision and the Neumann test returns
+$\norm{R_2}_\infty=54.6\ge1$. There the unitary Schur frame takes over, certifying with
+$\norm{R_2}\approx10^{-14}$ and $\kappa_2=1$, at the price of returning a single connected region
+rather than $100$ discs. That is the honest answer for a matrix whose eigenvalues have condition
+number $10^{17}$: they are not separable, and the method declines to pretend otherwise rather than
+splitting them.
 
-\paragraph{Ill-conditioned eigenbasis: Kahan (refuses).} \textsc{Kahan}'s $R=SK$ is nearly singular
-with an eigenbasis so ill-conditioned that the VBD Neumann test $\norm{R_2}_2<1$ fails at working
-precision ($\norm{R_2}_2\approx18$ for $n=60$): the routine \emph{refuses} to proceed (extended
-precision would be required). Refusal --- not an unverified answer --- is the intended behaviour.
+\paragraph{Defective spectrum: the Jordan block.} A single Jordan block $J_\lambda$ has one
+eigenvector and infinite eigenvalue condition number, and it behaves exactly as
+Theorem~\ref{thm:enclosure} predicts: both frames return \emph{one cluster of size $n$}, never $n$
+separate discs. This is the point of using $\sigmin$ of a block rather than an eigenvalue distance ---
+the region $\{z:\sigmin(P-zI)\le\beta_\Lambda\}$ tracks $\abs{z-\lambda}^m$, and splitting it would be
+the failure mode. The same happens on \textsc{Demmel}'s counterexample~\cite{Demmel1987}, and it is
+worth following that case through, because it shows precisely which quantity controls the enclosure.
+\textsc{Demmel}'s matrix is graded over $36$ orders of magnitude, $\norm{A}_2=10^{36}$. The Schur
+frame is unitary, so $\norm{R_2}_2=4.4\times10^{-16}$ is at the rounding level and $\kappa_2=1$; and
+with a single cluster the off-block part vanishes, $N=0$. Yet \eqref{eq:blockdev} then reads
+\[
+  \beta_\Lambda=\frac{\norm{R_2}_2\norm{\widetilde B}_2}{1-\norm{R_2}_2}
+  \;\approx\;4.4\times10^{-16}\cdot10^{36}\;=\;4.4\times10^{20},
+\]
+and the certified region has radius $\approx10^{36}$ --- as large as $\norm{A}$ itself. The enclosure
+is perfectly \emph{sound} and entirely \emph{vacuous}. The lesson is that $\beta_\Lambda$ scales with
+$\norm{\widetilde B}$, so what the certificate delivers is a bound \emph{relative} to the norm of the
+matrix; on a spectrum graded across $36$ decades, a backward-stable factorization simply carries no
+information about the small eigenvalues. This is a genuine limitation and not a defect of the
+implementation: no method that only bounds residuals in norm can do better here without extended
+precision.
 
-\paragraph{Defective spectrum: Jordan block.} A single Jordan block $J_\lambda$ has one eigenvector and
-infinite eigenvalue condition number; $\sigmin(J_\lambda-zI)$ tracks $\abs{z-\lambda}^m$, and the block
-region of Theorem~\ref{thm:enclosure} is the right object. Certifying it is genuinely hard and is future
-work (our current small-$n$ path has a dimension limitation on $m\gtrsim n$).
+We note also one implementation caveat, distinct from the above. When $\operatorname{cond}(V)$
+overflows (it reaches $10^{303}$ for the Jordan block and $10^{177}$ for \textsc{Demmel}) the computed
+$\kappa_2$ came out \texttt{NaN}. Theorem~\ref{thm:enclosure} does not involve $\kappa_2$ --- it uses
+$\sigmin(P_j-zI)$ and $\beta_\Lambda$, the latter through $\norm{R_2}$ as just displayed --- so the
+enclosure itself was never affected; but the resolvent transport of Section~\ref{sec:mrres} divides
+by $\kappa_2$, where a \texttt{NaN} would silently pass every comparison. The implementation now
+returns $\infty$ instead, so that floor is vacuous rather than meaningless.
 
-\paragraph{Flat singular spectrum: cyclic shift.} The circular shift $Q$ ($Q_{i+1,i}=1$, $Q_{1,n}=1$)
-is unitary, eigenvalues the $n$-th roots of unity, \emph{all} singular values $1$; hence
-$\norm{G_{22}}_2=1$ identically and the far block can never be made deep --- the method reports $\times$.
-We include it also because it is the textbook Arnoldi-failure case: from a coordinate start, restarted
-Arnoldi with exact shifts can deflate the wanted eigenvector~\cite{Embree2009}. \emph{We note honestly
-that our own random-start, fully-reorthogonalized Arnoldi does \textbf{not} reproduce the collapse}
-(its Ritz moduli come out $\approx0.99$, near the true unit circle); the classic pathology is a
-coordinate-start/restart phenomenon. The method's guarantee is not that Arnoldi is trustworthy but that
-the certificate is: a positive floor is verified regardless of the Ritz quality, and no positive floor
-is ever fabricated.
+\paragraph{On the Krylov reduction.} For completeness we record what the reduction of
+Section~\ref{sec:krylov} does on these matrices, remembering that they are not its intended input.
+Their singular values do not decay, so the deflation has nothing to remove and
+\eqref{eq:onehypothesis} fails: on \textsc{Grcar} $\norm{G_{22}}=2.0$ against $\abs{\lambda}=2.3$, on
+the convection--diffusion operator $491$ against $800$, and on the unitary cyclic shift (all
+$\sigma=1$) $\norm{G_{22}}=1$ identically, so the far block can never be made deep. In each case the
+assembly returns a non-positive floor and the method declines. For small $n$ the captured frame can
+even exhaust $\C^n$, leaving no far block at all. These are correct negatives; the regime is
+Figure~\ref{fig:regime}.
+
+We include the cyclic shift also because it is the textbook Arnoldi-failure case: from a coordinate
+start, restarted Arnoldi with exact shifts can deflate the wanted eigenvector~\cite{Embree2009}.
+\emph{We note honestly that our own random-start, fully-reorthogonalized Arnoldi does \textbf{not}
+reproduce the collapse} (its Ritz moduli come out $\approx0.99$, near the true unit circle); the
+classic pathology is a coordinate-start/restart phenomenon. The method's guarantee is not that Arnoldi
+is trustworthy but that the certificate is.
 
 \paragraph{Real-application sparse matrices (Matrix Market).} The natural non-normal examples in the
 method's regime are sparse operators with decaying singular values from the \textsc{Non-Hermitian
@@ -975,21 +1008,24 @@ Eigenvalue Problem} collection~\cite{MatrixMarket} (e.g.\ \textsc{Tolosa}, \text
 reaction--diffusion \textsc{rdb} family); reporting these is in progress.
 
 \begin{table}[t]\centering\small
-\begin{tabular}{@{}llll@{}}
+\begin{tabular}{@{}lrrrrr@{}}
 \toprule
-Matrix & singular spectrum & VBD & outcome \\
+Matrix & $\operatorname{cond}(V)$ & clusters & $\kappa_2$ & largest radius & containment \\
 \midrule
-Transfer (GKW, H\'enon, Lorenz) & decays (low-rank tail)  & $\norm{R_2}<1$ & \textbf{certifies} leading spectrum \\
-Grcar ($n{=}100$)               & flat, full-rank          & $\kappa_2=1$   & fails safely ($\norm{G_{22}}=2.0$ vs $\abs{\lambda}{=}2.3$) \\
-Convection--diffusion           & flat, full-rank          & $\kappa_2=1$   & fails safely ($\norm{G_{22}}=491$ vs $\abs{\lambda}{=}800$) \\
-Kahan ($n{=}60$)                & --                       & $\norm{R_2}=18$& \textbf{refuses} (Neumann test fails) \\
-Jordan block (defective)        & --                       & --             & future work \\
-Cyclic shift (unitary)          & all $\sigma=1$           & $\kappa_2{=}16$& fails ($\norm{G_{22}}=1$, never deep) \\
+\textsc{Grcar} ($n{=}100$)       & $5.1\cdot10^{17}$  & $1$ (of 100) & $1.0$              & $3.8$                & $100/100$ \\
+\textsc{Kahan} ($n{=}60$)        & $9.7\cdot10^{12}$  & $60$ singletons & $1.1\cdot10^{13}$ & $1.4\cdot10^{-8}$   & $60/60$ \\
+Jordan block ($n{=}20$)          & $8.7\cdot10^{303}$ & $1$ (of 20)  & $1.0$              & $1.0$                & $20/20$ \\
+Convection--diffusion ($n{=}80$) & $9.1\cdot10^{10}$  & $80$ singletons & $9.1\cdot10^{10}$ & $1.7\cdot10^{-2}$   & $80/80$ \\
+\textsc{Demmel} ($n{=}10$)       & $3.4\cdot10^{177}$ & $1$ (of 10)  & $1.0$              & $10^{36}$            & $10/10$ \\
 \bottomrule
 \end{tabular}
-\caption{The method on the standard gallery. It \emph{certifies} where the singular spectrum decays
-(the transfer-operator regime) and \emph{fails safely} --- a non-positive floor or an explicit
-refusal, never a false enclosure --- where it does not.}
+\caption{The Miyajima--Rump enclosure on the classical dense non-normal gallery. \textbf{Containment
+holds in every case}: all $n$ true eigenvalues lie in the certified regions. Where the eigenbasis is
+usable the spectrum is separated into singletons with tight radii; where it is not
+(\textsc{Grcar} at $\operatorname{cond}(V)>1/u$, and the defective \textsc{Jordan} and \textsc{Demmel}
+matrices) the enclosure correctly returns a \emph{single} cluster rather than $n$ discs, its region
+$\{z:\sigmin(P-zI)\le\beta_\Lambda\}$ tracking $\abs{z-\lambda}^m$. Reproducible:
+\texttt{bench/nonnormal\_gallery.jl}.}
 \label{tab:gallery}
 \end{table}
 

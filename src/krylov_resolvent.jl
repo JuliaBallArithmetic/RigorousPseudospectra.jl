@@ -958,7 +958,13 @@ function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig
     # 3. augmented captured frame Q = orth(V_g ∪ U); V_g orthonormal ⇒ clean project-and-drop
     Up = U .- Vg * (Vg' * U)
     keep = [j for j in axes(Up, 2) if norm(Up[:, j]) > 1e-8]
-    Qf = Matrix(qr(hcat(Vg, Up[:, keep])).Q)[:, 1:(size(Vg, 2) + length(keep))]
+    # The captured frame cannot have more columns than the ambient dimension. When
+    # `dim Vg + |keep| > n` — small `n`, or a singular block nearly as large as the space — the
+    # THIN QR supplies only `n` orthonormal columns, so slicing `1:(dim Vg + |keep|)` overran it
+    # (BoundsError: a 30×30 Jordan block asking for 45 columns of a 30×30 factor). Cap at what the
+    # factorization actually provides.
+    Qfull = Matrix(qr(hcat(Vg, Up[:, keep])).Q)
+    Qf = Qfull[:, 1:min(size(Vg, 2) + length(keep), size(Qfull, 2))]
     # 4. faithful captured block G11 = Q*AQ + its VBD (Rump–Miyajima) — certified eigenvalues.
     # The block entries come from Float64 matvecs; the VBD/candidates stay Float64, but the σ11
     # svdbox may run in `prec` (BigFloat) — a targeted boost (`Hcp`) that certifies σ_min at scales
@@ -988,9 +994,19 @@ function certify_leading_eigs_sing(Amul, Aadj, n::Int; neig::Int = 5, nblock_eig
     # FULL basis of ran(P_Q) (N = n − dim Q) — the completeness certificate for the ‖G₂₂‖ upper
     # bound (Prop. 5). N matvecs: the price of rigour.
     Ng = n - size(Qf, 2)
-    Lg = lanczos_pro(GtG, n, Ng; v0 = Pq(randn(ComplexF64, n)), reorth = reorth)
-    _, _, R1g, R2g = far_floor(Lg, Ng)
-    G22n = sqrt(max(0.0, lanczos_lambda_max(Lg, Ng)))
+    # DEGENERATE far block: if the captured frame already spans ℂⁿ then P⊥ = 0, the far block is
+    # the operator on a zero-dimensional space, and ‖G₂₂‖ = 0 exactly (no Lanczos to run, and none
+    # is meaningful — `lanczos_pro` with kmax = 0 would return an empty run). Then G₁₁ is A in a
+    # unitary basis and the assembly is trivially satisfied. This is the small-n limit.
+    local R2g, G22n
+    if Ng <= 0
+        R2g = 0.0
+        G22n = 0.0
+    else
+        Lg = lanczos_pro(GtG, n, Ng; v0 = Pq(randn(ComplexF64, n)), reorth = reorth)
+        _, _, _, R2g = far_floor(Lg, Ng)
+        G22n = sqrt(max(0.0, lanczos_lambda_max(Lg, Ng)))
+    end
     # 6. per target eigenvalue: adaptive-radius isolation. Targets = the leading `neig`, or (when
     # `Rcirc` is set) EVERY certified block eigenvalue with |λ| > Rcirc — the automatic outside-R set.
     targets = Rcirc === nothing ? ord[1:min(neig, length(ord))] :

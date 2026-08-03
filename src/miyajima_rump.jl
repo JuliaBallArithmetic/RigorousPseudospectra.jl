@@ -177,6 +177,14 @@ function _certify(Bc::Matrix{Complex{T}}, W::Matrix{Complex{T}};
         end
         σmax * invW
     end
+    # κ₂ must never escape as NaN. When the candidate basis is numerically singular (a defective
+    # spectrum: cond(W) reaches 1e303 for a Jordan block, 1e177 for Demmel's counterexample), the
+    # approximate inverse overflows and the product above can evaluate to NaN. The ENCLOSURE is
+    # unaffected — Theorem `enclosure` reads σ_min off the diagonal blocks and never uses κ₂ — but
+    # the resolvent transport of `vbd_resolvent`/`sigma_min_lower` divides by it, and a NaN would
+    # silently poison every comparison (NaN < x and NaN > x are both false) instead of failing
+    # loudly. Inf is the honest value: no transport bound is available, so that floor is vacuous.
+    isfinite(kappa) || (kappa = T(Inf))
 
     adj = falses(n, n)
     @inbounds for j in 1:n, i in 1:(j - 1)
