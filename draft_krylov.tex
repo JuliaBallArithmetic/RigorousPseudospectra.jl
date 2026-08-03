@@ -971,11 +971,26 @@ with a single cluster the off-block part vanishes, $N=0$. Yet \eqref{eq:blockdev
 \]
 and the certified region has radius $\approx10^{36}$ --- as large as $\norm{A}$ itself. The enclosure
 is perfectly \emph{sound} and entirely \emph{vacuous}. The lesson is that $\beta_\Lambda$ scales with
-$\norm{\widetilde B}$, so what the certificate delivers is a bound \emph{relative} to the norm of the
-matrix; on a spectrum graded across $36$ decades, a backward-stable factorization simply carries no
-information about the small eigenvalues. This is a genuine limitation and not a defect of the
-implementation: no method that only bounds residuals in norm can do better here without extended
-precision.
+$\norm{\widetilde B}$, so what the residual layer delivers is a bound \emph{relative} to the norm of
+the matrix; on a spectrum graded across $36$ decades it carries no information about the eigenvalues.
+
+Two things rescue it, and they are worth separating. First, the \emph{exact-SVD escape} of
+Section~\ref{sec:mrres} does not pay $\norm{\widetilde B}$ at all: taking
+$\sigmin(A-zI)$ from a verified $\svdbox$ rather than from a residual improves the localization from
+radius $10^{36}$ to $10^{30}$. Second --- and this is the real obstruction --- a verified SVD in
+working precision has an \emph{absolute} noise floor $\approx u\norm{A}=10^{-16}\cdot10^{36}=10^{20}$,
+so no Float64 computation can resolve an eigenvalue at $-1$. The impediment is precision, not
+structure. Since the whole pipeline is generic in the float type, raising it settles the matter: at
+$256$ bits the eigenvalue is enclosed in a disc of radius $1$, and at $512$ bits in a disc of radius
+$\boldsymbol{10^{-2}}$, with certified values
+\[
+  \sigmin(A-zI)\;\ge\;3.9\cdot10^{-39},\quad 4.7\cdot10^{-47},\quad 9.2\cdot10^{-57}
+  \qquad\text{at}\qquad \abs{z-\lambda}=1,\;10^{-1},\;10^{-2}.
+\]
+Those three numbers fall by ten orders per decade of $\abs{z-\lambda}$: this is exactly the
+$\abs{z-\lambda}^{m}$ law of Theorem~\ref{thm:enclosure} for the single Jordan block of size $m=10$,
+observed rather than assumed, and it is why the block region --- and not an eigenvalue distance --- is
+the right object.
 
 We note also one implementation caveat, distinct from the above. When $\operatorname{cond}(V)$
 overflows (it reaches $10^{303}$ for the Jordan block and $10^{177}$ for \textsc{Demmel}) the computed

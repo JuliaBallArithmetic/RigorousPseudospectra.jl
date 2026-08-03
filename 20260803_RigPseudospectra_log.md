@@ -38,3 +38,16 @@ working precision. Earlier wording ("the enclosure is unaffected") was misleadin
 
 **CAVEAT:** the noise sweep ran while BallArithmetic was being edited (a recompile happened mid-run);
 the trend dwarfs any plausible perturbation but the numbers should be regenerated before publication.
+
+### Demmel resolved (Nisoli: "our Krylov approach may work with demmel") — it does, in precision
+
+Demmel's singular values DO collapse (σ₂/σ₁ = 2.2e-24, numerically rank 1) — genuinely the Krylov
+regime. Two separate effects, measured:
+ (1) exact-SVD escape avoids the ‖Ã‖ factor of β_Λ ⇒ localization 1e36 → 1e30 (6 orders) in Float64;
+ (2) but a verified SVD has an ABSOLUTE floor u‖A‖ = 1e-16·1e36 = 1e20, so Float64 can never resolve
+     an eigenvalue at −1. Obstruction is PRECISION, not block structure.
+Extended precision settles it (pipeline is generic in the float type):
+  256 bits: certifies r=1.0 (σ_min ≥ 3.8e-39); fails r=0.1
+  512 bits: certifies r=1.0, 0.1, 0.01 → σ_min ≥ 3.9e-39, 4.7e-47, 9.2e-57
+The three values drop ~10 decades per decade of r: the |z−λ|^m law of Thm 1 for the m=10 Jordan
+block, OBSERVED. Demmel is now an illustration of the block region, not a failure. Paper updated.
