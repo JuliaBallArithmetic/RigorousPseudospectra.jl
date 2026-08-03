@@ -193,18 +193,28 @@ matrix products.
   \item \textbf{Newton--Rump separation.} Diagonalize \emph{between} clusters and stop
     \emph{within} them: apply the reduced-resolvent step \eqref{eq:correction} to the
     cross-cluster entries only, $W\leftarrow W(I+X)$, $X_{ij}=-M_{ij}/(d_i-d_j)$ for $i,j$
-    in different clusters. The clustering is fixed by a \emph{merge-only,
-    self-correcting} rule, after Rump's \texttt{verifyeigall}: start from the finest
-    grouping (singletons separated by a distance threshold $\tau\sim\sqrt u\,\norm A$) and
-    \emph{merge} any column that fails to contract --- the floating-point surrogate
-    ($\norm{X_{:,j}}_2\ge 1$, or the precision floor $\abs{d_i-d_j}<u^{1/k}\norm A$ for a
-    tentative $k$-block) for Rump's rigorous verification failing --- iterating until no
-    column fails. Clusters only \emph{grow}; this is the clustering of
-    Section~\ref{sec:geom} (refuse the step where it does not contract), made
-    self-correcting. A genuinely near-defective cluster --- e.g.\ a geometrically decaying
-    tail --- coalesces into one block rather than being split into ill-posed pieces. The
-    per-pair test would miss the \emph{cumulative} coupling of such a chain; the
-    column-norm test sees it.
+    in different clusters. The clustering is by \emph{diagonal distance} alone: group
+    $i$ and $j$ when $\abs{d_i-d_j}<\tau$, $\tau\sim\sqrt u\,\norm A$, and take connected
+    components. This is exactly the rule of both references --- Rump's
+    \texttt{verifyeigall} clusters by \texttt{mig(d-d.')\,<=\,1e-14*normA} followed by
+    \texttt{conncomp}, and Miyajima's \texttt{bdg} grows a cluster while the nearest
+    remaining approximate eigenvalue is within \texttt{tol}. Neither forms a block from
+    the size of a decoupling transform: Rump solves no Sylvester equation at all, and
+    Miyajima gates elimination on $\abs{d_i-d_j}>\texttt{tol}$, i.e.\ on the pair lying in
+    \emph{different clusters}, never on the magnitude of the off-diagonal entry.
+
+    We warn against the variant --- which we used in an earlier draft of this pipeline ---
+    that additionally \emph{merges} any column whose decoupling transform fails to
+    contract, $\norm{X_{:,j}}_2\ge 1$. It has no basis in either reference; it appears to
+    arise from reading Rump's Remark~2.3 (``the columns $\mu_i$ in $Z$, where
+    $\abs{\mu_i}>1$ for a cluster'') as a column \emph{norm}, where $\abs{\mu_i}$ is the
+    \emph{cardinality} of an index set. Because the test aggregates
+    $\sum_i\abs{M_{ij}/(d_i-d_j)}$ over a whole column, on a strongly non-normal band
+    (off-diagonals $O(1)$ over gaps $O(1)$) it fires on every column and collapses the
+    whole spectrum into a single block even where the eigenvalues are plainly separable.
+    The rigorous arbiter of clustering is the overlap of the certified discs
+    (Section~\ref{sec:rigor}), applied \emph{after} certification, as in Miyajima's
+    Algorithm~1 --- not a floating-point surrogate applied before it.
   \item \textbf{Block-diagonal approximation.} On the separated $M=W^{-1}AW$, zero the
     (now small) off-block entries to read off the candidate
     $\Lambda=\operatorname{blockdiag}(P_1,\dots,P_q)$, $P_j=M_{\mathcal C_j\mathcal C_j}$.
@@ -270,9 +280,27 @@ stall and vice versa, this fall-back recovers the disjoint failures
 ($36/40$), parameter-free. The few bases that stall for \emph{both} ($4/40$ here) are
 first-order--obstructed --- the cluster is too coupled for any single Newton step ---
 and call for the extended-precision local re-solve (\S To~do), not a different
-first-order correction. \emph{Practical rule:} default to the cheap entrywise sweep and,
-on a detected stall, switch to the block-Sylvester step (or, with one variant only,
-apply a moderate random kick); a per-step \emph{combination} of the two buys nothing.
+first-order correction.
+
+(iv) Away from the near-defective regime the two are \emph{not} comparable, and the
+experiment above --- which scores convergence of the refinement on a coupled cluster ---
+does not see it. Scoring instead the quantity one actually ships, the worst certified
+disc radius, the block step wins by orders of magnitude on ordinary spectra, because it
+is \emph{exact}: one Sylvester solve annihilates the whole off-diagonal strip, whereas
+the entrywise sweep is first order and must iterate. On a random $5\times5$ we measured
+$1.77$ (entrywise) against $1.02\cdot10^{-13}$ (block); on a random $20\times20$, $18.2$
+against $3.13\cdot10^{-12}$; on Grcar$(20)$, $3.2$ against $1.98\cdot10^{-12}$. The
+entrywise figures are those of the unrefined Schur frame: guarded against the
+enclosure-inflating sweeps it can otherwise produce, the iteration simply declines to
+move.
+
+\emph{Practical rule:} do not choose. The basis is a \emph{candidate} --- correctness
+rests entirely on the certification of Section~\ref{sec:rigor}, which is valid for any
+$W$ passing $\norm{R_2}<1$ --- so one may generate several candidates (no refinement,
+entrywise, block) and keep whichever \emph{certifies} best, scoring on the certified
+disc radii and off-block remainder. This costs one certification per candidate, needs no
+stall detector and no tuning, and cannot affect rigour; it also subsumes the fall-back
+above, since a candidate that stalls simply loses the comparison.
 \end{remark}
 
 \paragraph{Certification.} On the final $W$, with the block-diagonal candidate
