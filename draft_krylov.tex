@@ -869,13 +869,15 @@ $\approx3\%$ at the tested points.
 
 \paragraph{Contracting Lorenz.} A sharper spectral gap: the Arnoldi Ritz moduli are
 $0.9988,\,0.3151,\,0.3151,\,0.2690,\dots$, so a single eigenvalue lies outside $R=0.6$. With
-$n_{\mathrm{sing}}=12$ and $\dim\mathcal Q=92$ the deflation certifies $\norm{G_{22}}_2=0.234<R$, and
-the method returns \textbf{exactly one eigenvalue outside $0.6$}, $\lambda=0.9988$, with
-$\sigmin\ge2.27\!\times\!10^{-2}$ and enclosure $10^{-7}$; wall time $\approx212$\,s. The
-eigenvalue is not exactly $1$ because this discretization is not mass-preserving (the map is not
-periodic on the domain, and we measure a $1.3\%$ defect in $A^*\mathbf 1=\mathbf 1$). Its resolvent
-behaves as expected for a simple isolated eigenvalue: we measure $\sigmin(G_{11}-zI)\approx0.57\abs{z-\lambda}$
-near it, the factor being the eigenvalue condition number $\kappa(\lambda)\approx1.8$.
+$n_{\mathrm{sing}}=12$ and $\dim\mathcal Q=92$ the deflation certifies $\norm{G_{22}}_2=0.235<R$, and
+the method returns \textbf{exactly one eigenvalue outside $0.6$}, the Perron eigenvalue
+$\lambda=1$, with $\sigmin\ge2.27\!\times\!10^{-2}$ and enclosure $10^{-7}$; wall time
+$\approx157$\,s. By Proposition~\ref{prop:count} every other eigenvalue therefore satisfies
+$\abs{\lambda}\le0.6$, i.e.\ a certified spectral gap of at least $0.4$, uniformly across the noise
+widths of Table~\ref{tab:gaps}. The discretization is mass-preserving (periodic boundary), and the
+certified $\lambda_1=1.0000$ to the enclosure radius confirms it. Its resolvent behaves as expected
+for a simple isolated eigenvalue: we measure $\sigmin(G_{11}-zI)\approx0.57\abs{z-\lambda}$ near it,
+the factor being the eigenvalue condition number $\kappa(\lambda)\approx1.8$.
 
 \paragraph{Gauss--Kuzmin--Wirsing.} A benchmark whose sub-dominant eigenvalue (the GKW constant) is a
 classical target; the far block is low-rank, and a small captured block certifies the gap~\cite{NisoliGauss}.
@@ -888,8 +890,9 @@ when $k=1$. Table~\ref{tab:gaps} reports both maps at $R=0.6$ across noise width
 H\'enon operator every level yields a certified gap, sharp wherever more than one eigenvalue lies
 outside $R$; the gap narrows from $0.357$ to $0.254$ as the noise falls from $0.2$ to $0.05$, since
 less smoothing means less contraction and the subdominant spectrum moves outward. The Lorenz operator
-has only its Perron eigenvalue outside $R=0.6$ at every level, so the table records the lower bound
-$\abs{\lambda_1}-R$; lowering $R$ toward its true $\abs{\lambda_2}\approx0.32$ would sharpen these.
+(periodic, hence mass-preserving, so $\lambda_1=1$ exactly) has only its Perron eigenvalue outside
+$R=0.6$ at every level, giving the uniform bound $\ge0.4$; lowering $R$ toward its true
+$\abs{\lambda_2}\approx0.32$ would sharpen it to $\approx0.68$.
 
 \begin{table}[t]\centering\small
 \begin{tabular}{@{}lrrrrrl@{}}
@@ -903,10 +906,10 @@ $\abs{\lambda_1}-R$; lowering $R$ toward its true $\abs{\lambda_2}\approx0.32$ w
  & $0.05$ & $97$ & $177$ & $0.472$ & $7$ & $\mathbf{0.2543}$ \ (sharp, $\abs{\lambda_2}=0.7457$) \\
 \midrule
 \multirow{4}{*}{Lorenz}
- & $0.30$ & $2$  & $82$  & $0.078$ & $1$ & $\ge0.2477$ \\
- & $0.20$ & $4$  & $84$  & $0.078$ & $1$ & $\ge0.3754$ \\
- & $0.10$ & $12$ & $92$  & $0.232$ & $1$ & $\ge0.3988$ \\
- & $0.05$ & $32$ & $112$ & $0.389$ & $1$ & $\ge0.3996$ \\
+ & $0.30$ & $2$  & $82$  & $0.069$ & $1$ & $\ge0.4000$ \\
+ & $0.20$ & $6$  & $86$  & $0.111$ & $1$ & $\ge0.4000$ \\
+ & $0.10$ & $12$ & $92$  & $0.235$ & $1$ & $\ge0.4000$ \\
+ & $0.05$ & $32$ & $112$ & $0.388$ & $1$ & $\ge0.4000$ \\
 \bottomrule
 \end{tabular}
 \caption{Certified spectral gaps for the two transfer operators at $R=0.6$, depth-$6$ grid

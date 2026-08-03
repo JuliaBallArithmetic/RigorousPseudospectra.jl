@@ -98,3 +98,25 @@ form IS the pseudospectrum. So the regime condition is not an algorithmic artifa
 pseudospectral geometry: the method certifies exactly when the PSEUDOSPECTRUM (not the spectrum) fits
 inside R after an affordable deflation. ‖A‖/ρ(A) is the crude proxy and already predicts the Matrix
 Market outcomes (rdb ≈1.05 certifies, Olmstead ≈9 struggles/fails).
+
+### Lorenz recomputed with PERIODIC boundary (the earlier runs were ABSORBING — wrong)
+
+Nisoli: "the certificate for Lorenz was with absorbing boundary condition, we need periodic."
+Symptom of the old bug, visible in our own output: λ1 = 0.9988 not 1, and ‖A*1−1‖/‖1‖ = 1.27e-2
+(mass leaking out of the absorbing boundary). Also fixed: rx = round(w/cellwidth), since
+uniform_noise_box(w,2) has HALF-WIDTH w (so the earlier rx labels were half the true value).
+
+LORENZ, periodic, R=0.6, depth 6 — λ1 = 1.0000 EXACTLY at every level (mass conservation):
+  noise 0.30 rx=19 nsing=2  dimQ=82  ‖G22‖=0.0689  #out=1  gap ≥ 0.4000  227s
+  noise 0.20 rx=13 nsing=6  dimQ=86  ‖G22‖=0.1108  #out=1  gap ≥ 0.4000  176s
+  noise 0.10 rx=6  nsing=12 dimQ=92  ‖G22‖=0.2351  #out=1  gap ≥ 0.4000  157s
+  noise 0.05 rx=3  nsing=32 dimQ=112 ‖G22‖=0.3876  #out=1  gap ≥ 0.4000  152s
+All σ_min ≥ 6.7e-2 / 5.3e-2 / 2.3e-2 / 8.5e-3, enclosures 1e-7. Cleaner than the absorbing run:
+uniform gap ≥ 0.4 and an exact Perron eigenvalue. Paper §6.1 + Table tab:gaps updated;
+bench/results/ and RigorousUlam2D/results/ regenerated.
+
+### SESSION CLOSE (Nisoli AFK ~6 months from 2026-08-03)
+Memory written: krylov-paper-state-2026-08.md (state + open items),
+certified-lanczos-needs-full-basis.md (the Prop-5 lesson).
+NOTE: RigPseudospectra (feat/hkk-locking) and RigorousUlam2D (main) are AHEAD OF UPSTREAM and
+NOT PUSHED; BallArithmetic (gram-weighted-certification) has no upstream configured.
