@@ -1,0 +1,2 @@
+Lorenz Rcirc=0.600: 212.4s  nsing=12 dim(Q)=92  ‖G₂₂‖=0.2337 (<R? yes ✓)  γ=0.3932  κ₂=5.9e+06  #outside=1
+  |λ|=0.9988 λ=+0.9988+0.0000i  σ_min≥2.271e-02 ✓  r_heur=2.0e-15 enclosure=1.0e-07

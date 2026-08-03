@@ -1,0 +1,39 @@
+==============================================================================
+CERTIFICATION LOG — henon Ulam operator, outside |z| = 0.6
+generated 2026-08-03T07:56:23.289
+==============================================================================
+Statements below are about the MATRIX A (the Ulam/Galerkin discretization).
+Lifting them to the transfer operator needs a BV→L¹ discretization bound, NOT included.
+
+operator: n = 4096  (depth 6 grid), noise width 0.1, matvec-only (x↦Ax, x↦A*x)
+
+--- certificate data (all rigorous; Prop. 5 full-basis Lanczos) ---
+wall time                : 721.3 s
+singular block nsing     : 54
+captured dim(Q)          : 134
+far Lanczos steps N      : 3962   (FULL basis — completeness certificate)
+‖G22‖                    : 0.445379   (certified λmax bound; need < 0.600)
+far block deep           : YES
+coupling γ               : 0.824439   (‖G12‖=0.386681, ‖G21‖=0.824439)
+‖R2‖ far block           : 2.536e-06   (Neumann test needs < 1)
+VBD κ₂ (diagnostic)      : 1.3393e+04
+eigenvalues outside R    : 4
+
+--- per-eigenvalue certificates ---
+λ                          σ_min floor  enclosure    certified 
++1.000000+0.000000i   1.0307e-02   1.00e-07   YES
++0.451450+0.529040i   1.0789e-03   1.00e-07   YES
++0.451450-0.529040i   1.0778e-03   1.00e-07   YES
+-0.674793+0.000000i   3.8431e-04   1.00e-07   YES
+
+--- COMPLETENESS outside R (a theorem, not a scan) ---
+For any |z| > R:  σ22 ≥ |z| − ‖G22‖ > 0  since ‖G22‖ = 0.4454 < R = 0.6.
+The assembly σ_min(A−zI) ≥ σ11σ22/(σ11+σ22+γ) is then POSITIVE whenever σ11 > 0, so every
+eigenvalue of A outside R must be a point where σ11 = σ_min(G11−zI) = 0, i.e. an eigenvalue
+of G11.  Hence  spec(A) ∩ {|z|>R}  ⊆  spec(G11) ∩ {|z|>R}  =  the 4 certified points.
+⇒ the certified list is COMPLETE outside |z| = 0.6.  This holds at all z at once; no grid,
+  no covering argument, no assumption on the spectral radius.
+
+--- numerical illustration (NOT the proof) + pseudospectrum plot data ---
+grid h = 0.0100 (cell half-diagonal 0.00707); cells whose rigorous floor exceeds it are
+eigenvalue-free by 1-Lipschitzness — we expect the survivors to hug the certified eigenvalues.

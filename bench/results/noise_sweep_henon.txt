@@ -1,0 +1,26 @@
+NOISE SWEEP — henon, depth 6 (n=4096), R=0.60, cell width 0.03125
+Less noise ⇒ slower singular decay ⇒ deeper deflation needed for ‖G₂₂‖ < R.
+====================================================================================================
+noise   rx   nsing  dim(Q)  ‖G₂₂‖     <R ?    #out     time(s)   certified gap |λ₂| ≤
+====================================================================================================
+0.200   3    18     98      0.2697    yes ✓   4        500.1     —
+           |λ|=1.0000 λ=+1.0000+0.0000i  σ_min≥2.919e-02 ✓  enclosure=1.0e-07
+           |λ|=0.6425 λ=-0.6425-0.0000i  σ_min≥3.523e-03 ✓  enclosure=1.0e-07
+           |λ|=0.6079 λ=+0.4042+0.4540i  σ_min≥3.012e-03 ✓  enclosure=1.0e-07
+           |λ|=0.6079 λ=+0.4042-0.4540i  σ_min≥3.021e-03 ✓  enclosure=1.0e-07
+0.100   2    54     134     0.4439    yes ✓   4        414.0     —
+           |λ|=1.0000 λ=+1.0000+0.0000i  σ_min≥1.036e-02 ✓  enclosure=1.0e-07
+           |λ|=0.6955 λ=+0.4514+0.5290i  σ_min≥1.091e-03 ✓  enclosure=1.0e-07
+           |λ|=0.6955 λ=+0.4514-0.5290i  σ_min≥1.092e-03 ✓  enclosure=1.0e-07
+           |λ|=0.6748 λ=-0.6748+0.0000i  σ_min≥3.879e-04 ✓  enclosure=1.0e-07
+0.050   1    97     177     0.4710    yes ✓   7        290.2     —
+           |λ|=1.0000 λ=+1.0000+0.0000i  σ_min≥6.678e-03 ✓  enclosure=1.0e-07
+           |λ|=0.7457 λ=+0.4840+0.5672i  σ_min≥9.039e-04 ✓  enclosure=1.0e-07
+           |λ|=0.7457 λ=+0.4840-0.5672i  σ_min≥9.040e-04 ✓  enclosure=1.0e-07
+           |λ|=0.6553 λ=-0.6361+0.1577i  σ_min≥1.812e-04 ✓  enclosure=1.0e-07
+           |λ|=0.6553 λ=-0.6361-0.1577i  σ_min≥1.811e-04 ✓  enclosure=1.0e-07
+           |λ|=0.6066 λ=-0.1839-0.5781i  σ_min≥1.888e-04 ✓  enclosure=1.0e-07
+           |λ|=0.6066 λ=-0.1839+0.5781i  σ_min≥1.878e-04 ✓  enclosure=1.0e-07
+====================================================================================================
+‖G₂₂‖ rising toward R as the noise falls IS the regime boundary — when it crosses,
+the single hypothesis fails and the method declines rather than returning a false answer.

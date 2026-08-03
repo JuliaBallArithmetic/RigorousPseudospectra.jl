@@ -1017,10 +1017,45 @@ reproduce the collapse} (its Ritz moduli come out $\approx0.99$, near the true u
 classic pathology is a coordinate-start/restart phenomenon. The method's guarantee is not that Arnoldi
 is trustworthy but that the certificate is.
 
-\paragraph{Real-application sparse matrices (Matrix Market).} The natural non-normal examples in the
-method's regime are sparse operators with decaying singular values from the \textsc{Non-Hermitian
-Eigenvalue Problem} collection~\cite{MatrixMarket} (e.g.\ \textsc{Tolosa}, \textsc{Olmstead}, the
-reaction--diffusion \textsc{rdb} family); reporting these is in progress.
+\paragraph{Real-application sparse matrices (Matrix Market).} The gallery above is a set of
+constructed pathologies. The proper test of the Krylov layer is sparse operators that arise from
+applications, and we take them from the \textsc{Non-Hermitian Eigenvalue Problem}
+collection~\cite{MatrixMarket}: the Brusselator reaction--diffusion family \textsc{rdb} and
+\textsc{Olmstead}. (\textsc{Tolosa} is listed in that collection but is not served at any path we
+could reach.) Here $R=\sqrt{\abs{\lambda_1}\abs{\lambda_2}}$, so a successful run certifies a
+spectral gap. Table~\ref{tab:mm} reports the outcome; three of the four certify, and the fourth
+declines.
+
+The instructive part is \emph{which} one declines, because it sharpens the regime statement. We have
+been saying that the method needs the singular values to decay, but \textsc{rdb200} certifies with
+$\sigma_{50}/\sigma_1=0.59$ --- barely any decay at all --- while \textsc{olm1000} fails with a
+comparable profile. The quantity that actually decides is $\norm{G_{22}}_2$ against $R$, and what
+governs \emph{that} is the departure from normality measured by $\norm{A}_2/\rho(A)$. For the
+\textsc{rdb} matrices this ratio is $\approx1.05$: the norm is essentially the spectral radius, a
+modest deflation suffices, and $\dim\mathcal Q$ stays small ($93$ of $200$, $127$ of $800$). For
+\textsc{Olmstead} it is $\approx9$, and the deflation must work much harder --- \textsc{olm500} only
+succeeds by capturing $279$ of $500$ dimensions, over half the space, which is brute force rather
+than a favourable regime --- while at $n=1000$ it cannot close the gap at all and the hypothesis
+\eqref{eq:onehypothesis} fails. That is the honest boundary: not ``the singular values decay'' in the
+abstract, but $\norm{G_{22}}_2<R$ after a deflation one can afford.
+
+\begin{table}[t]\centering\small
+\begin{tabular}{@{}lrrrrl@{}}
+\toprule
+Matrix & $n$ & $\sigma_{50}/\sigma_1$ & $\norm{A}_2/\rho(A)$ & $\norm{G_{22}}_2$ vs $R$ & outcome \\
+\midrule
+\textsc{rdb200}  & $200$  & $0.59$ & $1.04$ & $28.7<32.9$   & \textbf{gap} $\abs{\lambda_2/\lambda_1}\le0.986$ \\
+\textsc{olm500}  & $500$  & $0.91$ & $9.09$ & $2190<2544$   & $5$ eigenvalues certified \\
+\textsc{rdb800l} & $800$  & $0.85$ & $1.05$ & $27.7<30.9$   & $3$ eigenvalues certified \\
+\textsc{olm1000} & $1000$ & $0.98$ & $9.06$ & $91955>10163$ & \textbf{declines} (hypothesis fails) \\
+\bottomrule
+\end{tabular}
+\caption{The Krylov layer on Matrix Market NEP operators, with
+$R=\sqrt{\abs{\lambda_1}\abs{\lambda_2}}$. The decisive quantity is $\norm{G_{22}}_2<R$, and the
+departure from normality $\norm{A}_2/\rho(A)$ predicts it better than the raw singular-value decay.
+Reproducible: \texttt{bench/matrixmarket.jl}.}
+\label{tab:mm}
+\end{table}
 
 \begin{table}[t]\centering\small
 \begin{tabular}{@{}lrrrrr@{}}

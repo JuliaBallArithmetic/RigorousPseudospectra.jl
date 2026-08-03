@@ -1,0 +1,31 @@
+Matrix Market NEP — the Krylov layer on real sparse non-normal operators
+================================================================================
+rdb200 (brussel)  n=200  nnz=1120  ‖A‖₂=3.486e+01
+   σ₅₀/σ₁ = 5.87e-01   |λ₁|=3.3387e+01  |λ₂|=3.2450e+01   ratio |λ₂/λ₁|=0.9720
+   R=3.2915e+01: nsing=13 dim(Q)=93 ‖G₂₂‖=2.8693e+01  <R? yes ✓   #outside=1   (12.5s)
+      λ=-3.3387e+01+6.5919e-16i  σ_min≥4.020e-02 ✓  enclosure=3.3e-06
+   ⇒ CERTIFIED SPECTRAL GAP: every other eigenvalue has |λ| ≤ 3.2915e+01  (|λ₂/λ₁| ≤ 0.9859)
+olm500 (olmstead)  n=500  nnz=1996  ‖A‖₂=2.312e+04
+   σ₅₀/σ₁ = 9.05e-01   |λ₁|=2.5440e+03  |λ₂|=2.5437e+03   ratio |λ₂/λ₁|=0.9999
+   R=2.5439e+03: nsing=199 dim(Q)=279 ‖G₂₂‖=2.1904e+03  <R? yes ✓   #outside=5   (79.7s)
+      λ=-2.5489e+03-6.0746e-06i  σ_min≥1.468e-03 ✓  enclosure=2.4e-01
+      λ=-2.5481e+03-1.7238e-05i  σ_min≥1.219e-03 ✓  enclosure=2.4e-01
+      λ=-2.5467e+03-1.2935e-04i  σ_min≥1.171e-03 ✓  enclosure=3.7e-01
+      λ=-2.5454e+03-7.7756e-05i  σ_min≥1.180e-03 ✓  enclosure=2.5e-01
+      λ=-2.5439e+03+2.4556e-05i  σ_min≥1.502e-04 ✓  enclosure=1.5e-01
+rdb800l (brussel)  n=800  nnz=4640  ‖A‖₂=3.262e+01
+   σ₅₀/σ₁ = 8.46e-01   |λ₁|=3.1051e+01  |λ₂|=3.0810e+01   ratio |λ₂/λ₁|=0.9923
+   R=3.0930e+01: nsing=47 dim(Q)=127 ‖G₂₂‖=2.7701e+01  <R? yes ✓   #outside=3   (5.4s)
+      λ=-3.1532e+01-3.7822e-05i  σ_min≥1.587e-02 ✓  enclosure=1.3e-01
+      λ=-3.1105e+01-5.6681e-05i  σ_min≥1.866e-03 ✓  enclosure=1.6e-02
+      λ=-3.1051e+01-1.3323e-15i  σ_min≥1.686e-03 ✓  enclosure=3.1e-06
+olm1000 (olmstead)  n=1000  nnz=3996  ‖A‖₂=9.212e+04
+   σ₅₀/σ₁ = 9.76e-01   |λ₁|=1.0163e+04  |λ₂|=1.0163e+04   ratio |λ₂/λ₁|=1.0000
+   R=1.0163e+04: nsing=240 dim(Q)=320 ‖G₂₂‖=9.1955e+04  <R? NO ✗   #outside=4   (71.3s)
+      λ=-1.0168e+04+5.4019e-03i  σ_min≥0.000e+00 ✗  enclosure=NaN
+      λ=-1.0167e+04-6.5883e-02i  σ_min≥0.000e+00 ✗  enclosure=NaN
+      λ=-1.0166e+04-1.6768e-01i  σ_min≥0.000e+00 ✗  enclosure=NaN
+      λ=-1.0164e+04+1.6747e-01i  σ_min≥0.000e+00 ✗  enclosure=NaN
+================================================================================
+The method certifies exactly when the singular values decay enough that a modest
+deflation drives ‖G₂₂‖ below R; where they do not, the hypothesis fails and it declines.
