@@ -1,0 +1,19 @@
+CERTIFIED SPECTRAL GAPS from the noise sweeps (depth 6, n=4096, target circle R=0.6).
+By the exact-count proposition the certified list outside R is COMPLETE. Hence with >=2
+eigenvalues outside R the second-largest modulus is KNOWN and the gap is SHARP; with exactly
+one, nothing else lies outside R so |L2| <= R and the gap is bounded below by |L1| - R.
+
+
+### HENON
+noise  rx  nsing  dimQ  |G22|    #out  |L1|     |L2|      CERTIFIED SPECTRAL GAP
+0.300  5   8      88    0.1402   1     1.0000   <= 0.600  >= 0.4000
+0.200  3   18     98    0.2570   4     1.0000   0.6425    0.3575   (SHARP, enclosures 1e-7)
+0.100  2   54     134   0.4419   4     1.0000   0.6955    0.3045   (SHARP, enclosures 1e-7)
+0.050  1   97     177   0.4723   7     1.0000   0.7457    0.2543   (SHARP, enclosures 1e-7)
+
+### LORENZ
+noise  rx  nsing  dimQ  |G22|    #out  |L1|     |L2|      CERTIFIED SPECTRAL GAP
+0.300  10  2      82    0.0776   1     0.8477   <= 0.600  >= 0.2477
+0.200  6   4      84    0.0780   1     0.9754   <= 0.600  >= 0.3754
+0.100  3   12     92    0.2316   1     0.9988   <= 0.600  >= 0.3988
+0.050  2   32     112   0.3891   1     0.9996   <= 0.600  >= 0.3996

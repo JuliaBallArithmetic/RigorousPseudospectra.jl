@@ -75,3 +75,26 @@ certify_leading_eigs isolates 4 eigenvalues of a matrix whose spectrum is 1.000,
 0.734 — a tight cloud with ~4e-3 gaps that CANNOT be isolated. Rewritten to assert what is actually
 guaranteed: the dominant (separated) eigenvalue certifies, and SOUNDNESS (floor ≤ true σ_min) holds
 for every result whether or not it certifies. nblock 16 → 80 (at 16 the certified ‖G22‖=0.94 > |λ2|).
+
+### CORRECTION (Nisoli): Hénon DOES certify a spectral gap — sharply
+
+My sweep only printed a gap when #outside==1. BACKWARDS. By the exact-count proposition the certified
+list outside R is COMPLETE, so with ≥2 eigenvalues outside R the second-largest modulus is KNOWN
+(the runner-up of the certified list, enclosed to 1e-7) and the gap is SHARP — a BETTER statement
+than the |λ2| ≤ R bound available when only one is outside.
+
+HENON (R=0.6): 0.30 → ≥0.4000 (1 out); 0.20 → 0.3575 SHARP (|λ2|=0.6425); 0.10 → 0.3045 SHARP
+(0.6955); 0.05 → 0.2543 SHARP (0.7457). Gap NARROWS as noise falls (less smoothing ⇒ less
+contraction ⇒ subdominant spectrum moves out).
+LORENZ (R=0.6): only the Perron eigenvalue outside at every level ⇒ lower bounds only:
+≥0.2477 / 0.3754 / 0.3988 / 0.3996. Sharpening needs R lowered toward its true |λ2| ≈ 0.32.
+Fixed in 15_noise_sweep.jl; bench/results/certified_gaps.txt; paper Table tab:gaps.
+Hénon 0.2/0.1/0.05 were run twice (two independent runs) and agree to 3 digits — reproducibility check.
+
+### Pseudospectral obstruction (Nisoli's observation, now a Remark)
+Eckart–Young forces ‖G22‖ ≥ σ_{k+1}(A), so the hypothesis needs σ_{k+1}(A) < R ≈ ρ(A). For a NORMAL
+operator σ_j = |λ_j| and this is free. The EXCESS of σ_j over |λ_j| is non-normality, whose resolvent
+form IS the pseudospectrum. So the regime condition is not an algorithmic artifact but the
+pseudospectral geometry: the method certifies exactly when the PSEUDOSPECTRUM (not the spectrum) fits
+inside R after an affordable deflation. ‖A‖/ρ(A) is the crude proxy and already predicts the Matrix
+Market outcomes (rdb ≈1.05 certifies, Olmstead ≈9 struggles/fails).

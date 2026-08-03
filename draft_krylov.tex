@@ -5,6 +5,7 @@
 \usepackage{hyperref}
 \usepackage{xcolor}
 \usepackage{graphicx}
+\usepackage{multirow}
 
 \newtheorem{theorem}{Theorem}
 \newtheorem{lemma}[theorem]{Lemma}
@@ -879,6 +880,43 @@ near it, the factor being the eigenvalue condition number $\kappa(\lambda)\appro
 \paragraph{Gauss--Kuzmin--Wirsing.} A benchmark whose sub-dominant eigenvalue (the GKW constant) is a
 classical target; the far block is low-rank, and a small captured block certifies the gap~\cite{NisoliGauss}.
 
+\paragraph{Certified spectral gaps, and their dependence on the noise.} Because the certified list
+outside $R$ is complete (Proposition~\ref{prop:count}), a run with $k\ge2$ eigenvalues outside $R$
+determines the second-largest modulus \emph{exactly} --- it is the runner-up of the certified list ---
+and hence gives a \emph{sharp} spectral gap, not merely the bound $\abs{\lambda_2}\le R$ available
+when $k=1$. Table~\ref{tab:gaps} reports both maps at $R=0.6$ across noise widths. For the noisy
+H\'enon operator every level yields a certified gap, sharp wherever more than one eigenvalue lies
+outside $R$; the gap narrows from $0.357$ to $0.254$ as the noise falls from $0.2$ to $0.05$, since
+less smoothing means less contraction and the subdominant spectrum moves outward. The Lorenz operator
+has only its Perron eigenvalue outside $R=0.6$ at every level, so the table records the lower bound
+$\abs{\lambda_1}-R$; lowering $R$ toward its true $\abs{\lambda_2}\approx0.32$ would sharpen these.
+
+\begin{table}[t]\centering\small
+\begin{tabular}{@{}lrrrrrl@{}}
+\toprule
+& noise & $n_{\mathrm{sing}}$ & $\dim\mathcal Q$ & $\norm{G_{22}}_2$ & \#\,outside $R$ & certified gap \\
+\midrule
+\multirow{4}{*}{H\'enon}
+ & $0.30$ & $8$  & $88$  & $0.140$ & $1$ & $\ge0.400$ \\
+ & $0.20$ & $18$ & $98$  & $0.257$ & $4$ & $\mathbf{0.3575}$ \ (sharp, $\abs{\lambda_2}=0.6425$) \\
+ & $0.10$ & $54$ & $134$ & $0.442$ & $4$ & $\mathbf{0.3045}$ \ (sharp, $\abs{\lambda_2}=0.6955$) \\
+ & $0.05$ & $97$ & $177$ & $0.472$ & $7$ & $\mathbf{0.2543}$ \ (sharp, $\abs{\lambda_2}=0.7457$) \\
+\midrule
+\multirow{4}{*}{Lorenz}
+ & $0.30$ & $2$  & $82$  & $0.078$ & $1$ & $\ge0.2477$ \\
+ & $0.20$ & $4$  & $84$  & $0.078$ & $1$ & $\ge0.3754$ \\
+ & $0.10$ & $12$ & $92$  & $0.232$ & $1$ & $\ge0.3988$ \\
+ & $0.05$ & $32$ & $112$ & $0.389$ & $1$ & $\ge0.3996$ \\
+\bottomrule
+\end{tabular}
+\caption{Certified spectral gaps for the two transfer operators at $R=0.6$, depth-$6$ grid
+($n=4096$), matrix-free. All eigenvalue enclosures have radius $10^{-7}$. Halving the noise deepens
+the deflation required ($n_{\mathrm{sing}}$ from $8$ to $97$ on H\'enon) and raises $\norm{G_{22}}_2$
+toward $R$; every case still satisfies \eqref{eq:onehypothesis}. Reproducible:
+\texttt{examples/15\_noise\_sweep.jl} in the companion \texttt{RigorousUlam2D} package.}
+\label{tab:gaps}
+\end{table}
+
 \subsection{Resolvent sharpening in the far field}\label{sec:farfielddemo}
 
 The block-dominance floor of Proposition~\ref{prop:outerbdom} sharpens the certified resolvent exactly
@@ -1038,6 +1076,31 @@ succeeds by capturing $279$ of $500$ dimensions, over half the space, which is b
 than a favourable regime --- while at $n=1000$ it cannot close the gap at all and the hypothesis
 \eqref{eq:onehypothesis} fails. That is the honest boundary: not ``the singular values decay'' in the
 abstract, but $\norm{G_{22}}_2<R$ after a deflation one can afford.
+
+\begin{remark}[The regime condition is itself pseudospectral]\label{rem:pseudoobstruction}
+It is worth seeing why $\norm{A}_2/\rho(A)$ is the right predictor, because the reason closes the
+paper on itself. Deflating $k$ directions cannot beat Eckart--Young: whatever $\mathcal Q$ is chosen,
+\[
+  \norm{G_{22}}_2\;=\;\norm{P_\perp AP_\perp}_2\;\ge\;\sigma_{k+1}(A),
+\]
+so the hypothesis \eqref{eq:onehypothesis} demands $\sigma_{k+1}(A)<R$, with $R$ of the order of
+$\rho(A)$ since it must separate $\abs{\lambda_2}$ from $\abs{\lambda_1}$. For a \emph{normal}
+operator the singular values are the eigenvalue moduli, $\sigma_j=\abs{\lambda_j}$, and the condition
+is satisfied automatically as soon as $k$ covers the eigenvalues outside $R$: there is nothing to
+deflate beyond the spectrum itself. The obstruction is exactly the \emph{excess} of $\sigma_j$ over
+$\abs{\lambda_j}$ --- which is what non-normality means, and whose resolvent expression is the
+pseudospectrum. A large $\norm{A}_2/\rho(A)$ says the $\varepsilon$-pseudospectrum bulges far outside
+the spectrum, so $\sigmin(A-zI)$ stays small at radii where the eigenvalues have long since been
+passed, and no affordable deflation pushes the far block below $R$.
+
+So the method's regime is not an incidental algorithmic limitation but the pseudospectral geometry of
+the operator itself: it certifies the exterior precisely when the \emph{pseudospectrum}, and not
+merely the spectrum, fits inside $R$ after a deflation one can pay for. That is the same object the
+method is built to bound (Proposition~\ref{prop:complete}), and it is why the transfer operators of
+Section~\ref{sec:examples} --- noise-smoothed, hence with singular values that track the spectrum ---
+are the natural domain, while a strongly non-normal operator like \textsc{Olmstead}
+($\norm{A}_2/\rho(A)\approx9$) resists.
+\end{remark}
 
 \begin{table}[t]\centering\small
 \begin{tabular}{@{}lrrrrl@{}}

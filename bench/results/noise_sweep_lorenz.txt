@@ -3,6 +3,8 @@ Less noise ⇒ slower singular decay ⇒ deeper deflation needed for ‖G₂₂�
 ====================================================================================================
 noise   rx   nsing  dim(Q)  ‖G₂₂‖     <R ?    #out     time(s)   certified gap |λ₂| ≤
 ====================================================================================================
+0.300   10   2      82      0.0776    yes ✓   1        222.8     0.600 ✓
+           |λ|=0.8477 λ=+0.8477+0.0000i  σ_min≥5.392e-02 ✓  enclosure=1.0e-07
 0.200   6    4      84      0.0780    yes ✓   1        357.9     0.600 ✓
            |λ|=0.9754 λ=+0.9754-0.0000i  σ_min≥5.162e-02 ✓  enclosure=1.0e-07
 0.100   3    12     92      0.2316    yes ✓   1        291.0     0.600 ✓
@@ -10,5 +12,3 @@ noise   rx   nsing  dim(Q)  ‖G₂₂‖     <R ?    #out     time(s)   certifi
 0.050   2    32     112     0.3891    yes ✓   1        249.7     0.600 ✓
            |λ|=0.9996 λ=+0.9996+0.0000i  σ_min≥8.389e-03 ✓  enclosure=1.0e-07
 ====================================================================================================
-‖G₂₂‖ rising toward R as the noise falls IS the regime boundary — when it crosses,
-the single hypothesis fails and the method declines rather than returning a false answer.
