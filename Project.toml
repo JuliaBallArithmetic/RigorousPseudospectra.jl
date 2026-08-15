@@ -8,13 +8,13 @@ BallArithmetic = "77e4f72b-b5a4-4fb0-ac2a-dcc32095a072"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 
 [compat]
-BallArithmetic = "0.2"
+BallArithmetic = "0.3"
 LinearAlgebra = "1.10"
 julia = "1.10"
 
 [extras]
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
-Test = "8dfed614-5729-5b62-bb73-8f89d75bee26"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
 test = ["Test", "Random"]
