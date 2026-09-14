@@ -1,548 +1,780 @@
+# Tests of RigorousPseudospectra against dense ground truth. Run with
+#     julia --project=. test/runtests.jl            (add -t N to exercise the threaded sweep)
+#
+# "Truth" is computed densely in Float64 (LAPACK), so it carries its own rounding error, of
+# relative size about 1e-14 at these dimensions; comparisons "certified bound vs truth" therefore
+# allow a tolerance TOL·max(1, |truth|), and the tests print the smallest margin found and the
+# number of trials.
+
 using RigorousPseudospectra
 using LinearAlgebra
 using Random
+using SparseArrays
 using Test
+using Printf
 
-# --- test matrices ---------------------------------------------------------------
-rand_matrix(n; seed = 1) = (rng = MersenneTwister(seed); randn(rng, ComplexF64, n, n))
+include(joinpath(@__DIR__, "..", "bench", "matrices.jl"))
 
-# spectrum with prescribed (possibly repeated) eigenvalues in a well-conditioned
-# similarity — repeats are EXACT (semisimple), so their discs are coincident
-function spectrum(λ; seed = 1)
+const TOL = 1e-10
+le(a, b) = a <= b + TOL * max(1.0, abs(b))          # certified a ≤ true b, up to the truth's error
+
+# Blocks of A in the frame of the isometry Z of the polar decomposition Q = ZS.
+function truth_blocks(A, Q)
+    S = sqrt(Hermitian(Q' * Q))
+    Z = Q / S
+    P = I - Z * Z'
+    return (; Z, P, G11 = Z' * A * Z, G12 = Z' * A * P, G21 = P * A * Z, G22 = P * A * P)
+end
+
+# 2D stencil applied matrix-free: every output is the sum of at most five products taken in a fixed
+# order, so eq:roundA holds with ε_A = √5 γ_5 and η_A = √n·5η.
+function stencil_mul(x, n1, n2, c0, cW, cE, cS, cN)
+    y = similar(x)
+    @inbounds for i2 in 1:n2, i1 in 1:n1
+        idx = i1 + (i2 - 1) * n1
+        s = c0 * x[idx]
+        i1 > 1 && (s += cW * x[idx - 1])
+        i1 < n1 && (s += cE * x[idx + 1])
+        i2 > 1 && (s += cS * x[idx - n1])
+        i2 < n2 && (s += cN * x[idx + n1])
+        y[idx] = s
+    end
+    return y
+end
+
+# ε_A = √w γ_w, rounded upward
+epsA_width(w) = RigorousPseudospectra.mulu(RigorousPseudospectra.sqrtu(Float64(w)),
+    RigorousPseudospectra.gammau(w))
+
+# decaying singular values in random frames, plus a low-rank part with a few large eigenvalues
+function decaying(n; ρ = 0.7, seed = 1, cplx = false, nbig = 3)
     rng = MersenneTwister(seed)
-    n = length(λ)
-    S = randn(rng, ComplexF64, n, n)
-    return S * Diagonal(ComplexF64.(λ)) / S
+    T = cplx ? ComplexF64 : Float64
+    U = Matrix(qr(randn(rng, T, n, n)).Q)
+    V = Matrix(qr(randn(rng, T, n, n)).Q)
+    A = U * Diagonal(ρ .^ (0:(n - 1))) * V'
+    X = randn(rng, T, n, nbig)
+    λ = [1.0, -0.8, 0.6, 0.5, -0.45][1:nbig]
+    return A * 0.3 + X * Diagonal(λ) * pinv(X)
 end
 
-function jordan_block(m, λ = 0.0 + 0.0im)
-    (J = Matrix{ComplexF64}(λ * I, m, m);
-        for i in 1:(m - 1)
-            J[i, i + 1] = 1.0
-        end;
-        J)
-end
+@testset "RigorousPseudospectra" begin
 
-# every true eigenvalue lies in some certified disc
-function encloses_all(B, R; tol = 1e-8)
-    for λ in eigvals(ComplexF64.(Matrix(B)))
-        any(i -> abs(λ - R.centres[i]) <= R.radii[i] + tol, eachindex(R.centres)) ||
-            return false
-    end
-    return true
-end
-
-@testset "Miyajima–Rump eigenvalue enclosure" begin
-    @testset "smoke / API" begin
-        R = miyajima_rump(rand_matrix(8))
-        @test R isa MiyajimaRump
-        @test length(R.centres) == 8 == length(R.radii)
-        @test R.nrmR2 < 1
-        @test R.kappa >= 1 - 1e-12
-        @test sum(length(c.idx) for c in R.clusters) == 8
+    @testset "rem:counterexample: no bound where σ11σ22 ≤ γ1γ2" begin
+        @test assembly_floor(1, 1, 1, 1) == (0.0, false)
+        Q = reshape([1.0, 0], 2, 1)
+        A = [1.0 1; 1 1]
+        f, info = krylov_resolvent_floor(A, Q, 0.0)
+        @test f == 0 && !info.ok
+        # the paper's data, σ22(0) = σ_min(G22) = 1 exactly
+        @test assembly_floor(info.σ11, 1.0, info.γ1, info.γ2)[2] == false
+        A2 = [1.0 1; 1 0]
+        φ = (1 + sqrt(5)) / 2
+        f2, info2 = krylov_resolvent_floor(A2, Q, φ)
+        @test f2 == 0 && !info2.ok
+        @test info2.gbar < 1e-12                      # |z| > ḡ holds: the hypothesis is what fails
+        @test svdvals(A2 - φ * I)[end] < 1e-15
     end
 
-    @testset "containment — every eigenvalue in a certified disc" begin
-        for (n, seed) in ((6, 1), (12, 2), (20, 3), (30, 4))
-            B = rand_matrix(n; seed)
-            @test encloses_all(B, miyajima_rump(B))
-        end
-    end
-
-    @testset "centres recover the spectrum (well-conditioned)" begin
-        B = rand_matrix(16; seed = 7)
-        R = miyajima_rump(B)
-        # each true eigenvalue matched by a centre to within its radius
-        tru = sort(eigvals(ComplexF64.(B)); by = z -> (real(z), imag(z)))
-        cen = sort(R.centres; by = z -> (real(z), imag(z)))
-        @test maximum(abs.(tru .- cen)) <= maximum(R.radii) + 1e-8
-    end
-
-    @testset "normal matrix — tight, κ ≈ 1" begin
-        rng = MersenneTwister(5)
-        Q, _ = qr(randn(rng, ComplexF64, 14, 14))
-        B = Matrix(Q) * Diagonal(randn(rng, ComplexF64, 14)) * Matrix(Q)'
-        R = miyajima_rump(B)                      # default: cheap (Collatz) κ₂
-        @test maximum(R.radii) <= 1e-8            # negligible residue ⇒ tight discs
-        @test all(c -> length(c.idx) == 1, R.clusters)
-        @test R.kappa >= 1 - 1e-9                 # cheap κ₂ ≥ true (1), looser (~√n)
-        # κ₂≈1 needs the tight svdbox mode (opt-in); cheap overestimates ‖W‖₂ by ~√n
-        @test miyajima_rump(B; kappa_mode = :svdbox).kappa <= 1 + 1e-6
-        @test R.kappa > 1 + 1e-3                  # default really is the looser bound
-    end
-
-    @testset "coincident eigenvalues merge; separable ones stay split" begin
-        # A semisimple double eigenvalue (exactly coincident discs) merges into one
-        # component; the well-separated ones stay singletons. (Near-defective
-        # merging at finite separation is the deferred §4e regime.)
-        R = miyajima_rump(Matrix(Diagonal(ComplexF64[1, 1, 2, 3])))
-        @test sort([length(c.idx) for c in R.clusters]) == [1, 1, 2]
-    end
-
-    @testset "Gershgorin cluster count — each component holds its eigenvalues" begin
-        B = spectrum([1, 1, 1, 2, 2, 3, 4, 5]; seed = 3)   # multiplicities 3,2,1,1,1
-        R = miyajima_rump(B)
-        ev = eigvals(ComplexF64.(B))
-        for c in R.clusters
-            nin = count(λ -> any(i -> abs(λ - R.centres[i]) <= R.radii[i] + 1e-8, c.idx), ev)
-            @test nin == length(c.idx)                     # Gershgorin cluster theorem
-        end
-        @test sum(length(c.idx) for c in R.clusters) == 8
-    end
-
-    @testset "Jordan: exact fails honestly, perturbed is enclosed (finite κ)" begin
-        # an EXACT integer Jordan block is maximally degenerate (eig returns a
-        # rank-deficient W ⇒ ‖R₂‖ ≥ 1 ⇒ honest Step-4 failure)
-        @test_throws Exception miyajima_rump(jordan_block(8, 0.0 + 0im))
-        # a perturbed Jordan is regularized by floating eig to finite conditioning;
-        # its eigenvalues spread (~ε^{1/m}) and are still rigorously enclosed
-        for m in (3, 5, 8)
-            rng = MersenneTwister(m)
-            B = jordan_block(m, 0.0 + 0im) .+ 1e-6 .* randn(rng, ComplexF64, m, m)
-            R = miyajima_rump(B)
-            @test R.nrmR2 < 1
-            @test isfinite(R.kappa) && R.kappa >= 1 - 1e-9
-            @test encloses_all(B, R)
-        end
-    end
-
-    @testset "Neumann guard / determinism" begin
-        @test miyajima_rump([2.0 1.0; 0.0 3.0]) isa MiyajimaRump
-        # real input is accepted and complexified
-        @test miyajima_rump(Float64[0 -1; 1 0]) isa MiyajimaRump
-    end
-
-    @testset "certify a supplied basis W" begin
-        B = rand_matrix(10; seed = 9)
-        W = eigen(ComplexF64.(B)).vectors
-        R = miyajima_rump(B, W)              # certify the externally-produced basis
-        @test R isa MiyajimaRump
-        @test encloses_all(B, R)
-        # a bad basis (identity) is still certified — just loose, never wrong
-        Rid = miyajima_rump(Matrix(Diagonal(ComplexF64[1, 2, 3])), Matrix{ComplexF64}(I, 3, 3))
-        @test encloses_all(Matrix(Diagonal(ComplexF64[1, 2, 3])), Rid)
-    end
-
-    @testset "refinement: Newton steps tighten a rough basis, stay rigorous" begin
-        # start from a basis perturbed away from the true eigenvectors: refinement
-        # shrinks the off-diagonal residue (hence the certified radii) toward the
-        # κ·eps floor, while every intermediate certificate still encloses σ(B).
-        rng = MersenneTwister(31)
-        B = rand_matrix(12; seed = 31)
-        Wgood = eigen(ComplexF64.(B)).vectors
-        W = Wgood * (I + 0.02 * randn(rng, ComplexF64, 12, 12))   # rough basis (in basin)
-        R0 = miyajima_rump(B, W)
-        @test encloses_all(B, R0)
-        Wk = W
-        for _ in 1:5
-            Wk = refine_basis(B, Wk; steps = 1)                   # dynamic clustering
-            @test encloses_all(B, miyajima_rump(B, Wk))           # rigorous every step
-        end
-        @test maximum(miyajima_rump(B, Wk).radii) < maximum(R0.radii) / 10   # tightened
-    end
-
-    @testset "dynamic refinement: coincident stays clustered, separable refines" begin
-        # semisimple double eigenvalue: the dynamic working clustering neutralizes the
-        # un-separable pair (no Newton blow-up, ‖R₂‖<1 holds) — it stays a size-2
-        # cluster — while the distinct eigenvalues refine to singletons.
-        B = spectrum([1, 1, 2, 3, 4]; seed = 5)
-        R = miyajima_rump(B; refine = 6)
-        @test encloses_all(B, R)
-        @test R.nrmR2 < 1
-        @test sort([length(c.idx) for c in R.clusters]) == [1, 1, 1, 2]
-    end
-
-    @testset "driver: eigen → dynamic refine → certify stays rigorous, no blow-up" begin
-        B = rand_matrix(16; seed = 4)
-        R_plain = miyajima_rump(B)
-        R_ref = miyajima_rump(B; refine = 6)
-        @test encloses_all(B, R_plain)
-        @test encloses_all(B, R_ref)
-        @test R_ref.nrmR2 < 1
-        # eigen is already near-optimal here, so refinement neither helps much nor
-        # blows up (radii stay at the κ·eps floor)
-        @test maximum(R_ref.radii) <= 1e-6
-    end
-
-    @testset "block-Sylvester refinement variant vs entrywise sweep" begin
-        # off-diagonal residue of W⁻¹BW (Frobenius) — the quantity refinement shrinks
-        offres(B, W) = (A = ComplexF64.(W) \ (ComplexF64.(B) * ComplexF64.(W));
-            sqrt(sum(abs2, A - Diagonal(diag(A)))))
-
-        @testset "coincide on a fully-separated spectrum (all singletons)" begin
-            # every working block is a singleton ⇒ the block step IS the entrywise
-            # step (sylvester is never called), so the refined bases match to fp.
-            B = rand_matrix(10; seed = 11)
-            rng = MersenneTwister(11)
-            W0 = eigen(ComplexF64.(B)).vectors * (I + 0.01 * randn(rng, ComplexF64, 10, 10))
-            We = refine_basis(B, W0; steps = 3, mode = :entrywise)
-            Wb = refine_basis(B, W0; steps = 3, mode = :block)
-            @test maximum(abs.(We .- Wb)) < 1e-9
-        end
-
-        @testset "both rigorous + convergent on a near-defective cluster" begin
-            # a perturbed 4×4 Jordan block forms a PERSISTENT, internally-coupled
-            # working cluster (eigenvalues ~λ±ε^{1/4}, ill-conditioned W) coupled to
-            # separated singletons — the regime where the block-Sylvester
-            # cross-correction (full M_kk) genuinely differs from the entrywise step.
-            rng = MersenneTwister(45)
-            J = jordan_block(4, 2.0) .+ 1e-6 .* randn(rng, ComplexF64, 4, 4)
-            core = cat(J, fill(8.0 + 0im, 1, 1), fill(14.0 + 0im, 1, 1); dims = (1, 2))
-            S = I + 0.3 * randn(rng, ComplexF64, 6, 6)
-            B = ComplexF64.(S * core / S)
-            W0 = eigen(B).vectors * (I + 0.05 * randn(rng, ComplexF64, 6, 6))
-            r0 = offres(B, W0)
-            We, Wb = copy(W0), copy(W0)
-            for _ in 1:8
-                We = refine_basis(B, We; steps = 1, θ = 0.9, mode = :entrywise)
-                Wb = refine_basis(B, Wb; steps = 1, θ = 0.9, mode = :block)
-                @test encloses_all(B, miyajima_rump(B, We))   # rigorous each step …
-                @test encloses_all(B, miyajima_rump(B, Wb))   # … for BOTH variants
-            end
-            # On THIS (representative hard) basis the entrywise scalar-gap correction
-            # STALLS at a non-diagonal fixed point — its cross-cluster step ignores the
-            # within-cluster coupling of M_kk — while block-Sylvester converges to the
-            # κ·eps floor. (Aggregate over many bases the two are statistically tied
-            # with partly-disjoint stalls; see bench/refine_variants.jl.)
-            @test offres(B, Wb) < r0 / 1e6                    # block converges deeply
-            @test offres(B, Wb) < offres(B, We)               # block wins on this basis
-            @test offres(B, We) < r0                          # entrywise at least reduces
-            # :auto runs entrywise, detects the stall, retries block from W0 → converges
-            Wa = refine_basis(B, W0; steps = 20, mode = :auto)
-            @test offres(B, Wa) < r0 / 1e6                    # auto recovers the stall
-            @test encloses_all(B, miyajima_rump(B, Wa))
-            @info "near-defective refinement (offdiag ‖·‖_F)" start=r0 entrywise=offres(B, We) block=offres(
-                B, Wb) auto=offres(B, Wa)
-            @info "certified max radius" entrywise=maximum(miyajima_rump(B, We).radii) block=maximum(miyajima_rump(
-                B, Wb).radii)
-        end
-
-        @testset "driver threads mode, stays rigorous (block + auto)" begin
-            B = rand_matrix(14; seed = 7)
-            for m in (:block, :auto)
-                R = miyajima_rump(B; refine = 4, mode = m)
-                @test encloses_all(B, R)
-                @test R.nrmR2 < 1
-            end
-            @test_throws Exception miyajima_rump(B; refine = 1, mode = :nonsense)
-        end
-    end
-
-    @testset "free resolvent floor (§4f)" begin
-        # true σ_min(B − zI) = smallest singular value
-        true_smin(B, z) = minimum(svdvals(ComplexF64.(Matrix(B)) - z * I))
-
-        @testset "PRIMARY rigor: floor never exceeds the true σ_min" begin
-            for (n, seed) in ((6, 1), (10, 2), (16, 3))
-                B = rand_matrix(n; seed)
-                fr = free_resolvent(B, miyajima_rump(B; refine = 4))
-                ev = eigvals(ComplexF64.(B))
-                rng = MersenneTwister(seed)
-                zs = vcat(4 .* (randn(rng, ComplexF64, 40)),          # scattered
-                    ev .+ 0.3 .* randn(rng, ComplexF64, n),           # near spectrum
-                    ev .+ 1e-9)                                       # ~on eigenvalues
-                for z in zs
-                    @test sigma_min_lower(fr, z) <= true_smin(B, z) + 1e-9
-                    @test resolvent_bound(fr, z) >= 1 / (true_smin(B, z) + 1e-12) - 1e-6
-                end
-            end
-        end
-
-        @testset "normal matrix: floor is tight (κ₂≈1, ‖N‖≈0)" begin
-            rng = MersenneTwister(5)
-            Q, _ = qr(randn(rng, ComplexF64, 12, 12))
-            B = Matrix(Q) * Diagonal(randn(rng, ComplexF64, 12)) * Matrix(Q)'
-            # tightness needs the svdbox κ₂ (the cheap default loosens the floor by ~√n)
-            fr = free_resolvent(B, miyajima_rump(B; kappa_mode = :svdbox))
-            @test maximum(fr.rowsum) < 1e-6            # diagonal Ã ⇒ negligible row tails
-            @test maximum(fr.colsum) < 1e-6            #                  and column tails
-            @test fr.kappa <= 1 + 1e-6
-            for z in 4 .* randn(rng, ComplexF64, 30)
-                # for a normal matrix σ_min = dist(z, spectrum); floor recovers it
-                @test sigma_min_lower(fr, z) >= true_smin(B, z) - 1e-6
-                @test sigma_min_lower(fr, z) <= true_smin(B, z) + 1e-9
-            end
-            # the cheap default stays a VALID (looser) lower bound — never exceeds truth
-            frc = free_resolvent(B, miyajima_rump(B))
-            @test frc.kappa > 1 + 1e-3                 # cheap κ₂ is the looser bound
-            for z in 4 .* randn(rng, ComplexF64, 20)
-                @test sigma_min_lower(frc, z) <= true_smin(B, z) + 1e-9
-            end
-        end
-
-        @testset "near an eigenvalue the floor → 0 / resolvent → ∞" begin
-            B = rand_matrix(8; seed = 4)
-            fr = free_resolvent(B, miyajima_rump(B; refine = 4))
-            λ = eigvals(ComplexF64.(B))[1]
-            @test sigma_min_lower(fr, λ) <= 1e-6        # cannot certify σ_min > 0 at a pole
-            @test resolvent_bound(fr, λ) > 1e3
-            # far away the floor is positive and grows with distance
-            far = λ + 50
-            @test sigma_min_lower(fr, far) > 1
-        end
-
-        @testset "VBD: Schur → Newton-separate → orthogonalize (block-orthonormal, benign κ)" begin
-            # two well-separated defective 2×2 Jordan blocks in a similarity. The
-            # eigenvector frame is ill-conditioned (near-parallel defective eigenvectors);
-            # vbd_solve (schur → Newton-separate → orthogonalize per block) keeps each
-            # block orthonormal, so κ is governed by inter-block separation (benign).
-            J1 = ComplexF64[0 1; 0 0]
-            J2 = ComplexF64[10 1; 0 10]
-            core = ComplexF64[J1 zeros(2, 2); zeros(2, 2) J2]
-            U = I + 0.2 * randn(MersenneTwister(3), ComplexF64, 4, 4)
-            B = ComplexF64.(U * core / U)
-            W, clusters = vbd_solve(B)
-            @test sort(length.(clusters)) == [2, 2]              # separated the two blocks
-            for c in clusters                                    # each block orthonormalized
-                @test opnorm(W[:, c]' * W[:, c] - I) < 1e-10
-            end
-            R = miyajima_rump(B, W; kappa_mode = :svdbox)
-            @test R.kappa < miyajima_rump(B; kappa_mode = :svdbox).kappa / 1e5  # vastly better κ
-            @test R.kappa < 10                                   # genuinely benign
-            @test encloses_all(B, R)
-            vr = vbd_resolvent(B, R; blocks = clusters)   # use the vbd_solve block structure
-            truesmin(z) = minimum(svdvals(B - z * I))
-            rng = MersenneTwister(11)
-            for z in vcat(20 .* randn(rng, ComplexF64, 30), R.centres .+ 0.03)
-                @test sigma_min_lower(vr, z) <= truesmin(z) + 1e-9               # far-field rigorous
-                @test sigma_min_lower(vr, z; near = true) <= truesmin(z) + 1e-9  # per-z block SVD rigorous
-            end
-            # block-Gershgorin enclosure: every eigenvalue sits in some block disc, and the
-            # per-block radii match the block sizes (total multiplicity = n)
-            discs = block_enclosure(vr)
-            @test sum(d.mult for d in discs) == size(B, 1)
-            for λ in eigvals(B)
-                @test any(abs(λ - d.center) <= d.radius + 1e-9 for d in discs)
-            end
-        end
-
-        @testset "non-normality shows in the row/column tail (defective block)" begin
-            # A defective 2×2 Jordan block (coincident eigenvalue 5, off-diagonal 1) in the
-            # IDENTITY basis: Ã = B, so the recentred disc of row 1 has off-diagonal mass
-            # |Ã₁₂| = 1 — the non-normality appears DIRECTLY as a row tail (≥ 1), widening
-            # the local grey disc about λ = 5. (No separate ‖N‖₂ block measure needed.)
-            B = ComplexF64.(cat(jordan_block(2, 5.0), Diagonal(ComplexF64[10, 20, 30]);
-                dims = (1, 2)))
-            R = miyajima_rump(B, Matrix{ComplexF64}(I, 5, 5))
-            fr = free_resolvent(B, R)
-            @test maximum(fr.rowsum) > 0.9                   # the Jordan superdiagonal (=1)
-            # still a valid σ_min lower bound everywhere
-            rng = MersenneTwister(46)
-            for z in vcat(40 .* randn(rng, ComplexF64, 40), ComplexF64[5, 10, 20, 30] .+
-                                                            0.3)
-                @test sigma_min_lower(fr, z) <= true_smin(B, z) + 1e-8
-            end
-            # the resolvent is large near the defective eigenvalue (non-normal blow-up)
-            @test resolvent_bound(fr, 5.0 + 0.05im) > 10
-        end
-    end
-end
-
-@testset "certified polynomial range (bisection vs critical-point)" begin
-    # ascending coeffs ↦ p(x) = Σ cₖ xᵏ ; dense reference range over a fine grid
-    pval(c, x) = evalpoly(x, c)
-    function ref_range(c, a, b; m = 200_001)
-        xs = range(a, b; length = m)
-        vs = pval.(Ref(c), xs)
-        return minimum(vs), maximum(vs)
-    end
-    # a certified enclosure must CONTAIN the true range; brackets must be ordered
-    function sound(R, tlo, thi)
-        @test R.min_lo <= R.min_hi
-        @test R.max_lo <= R.max_hi
-        @test R.min_lo <= tlo + 1e-7          # encloses the true minimum from below
-        @test R.max_hi >= thi - 1e-7          # encloses the true maximum from above
-    end
-
-    @testset "smoke / API" begin
-        c = [0.0, -1.0, 0.0, 1.0]             # x³ − x
-        Rb = range_bisect(c, -2.0, 2.0)
-        Rc = range_critical(c, -2.0, 2.0)
-        @test Rb isa PolyRange && Rc isa PolyRange
-        @test Rb.method === :bisection && Rc.method === :critical
-        for R in (Rb, Rc)
-            sound(R, -6.0, 6.0)
-            @test R.min_lo ≈ -6 atol = 1e-6
-            @test R.max_hi ≈ 6 atol = 1e-6
-        end
-        @test Rc.diag.ncrit == 2              # x = ±1/√3 both interior
-    end
-
-    @testset "monotone & extrema at endpoints" begin
-        c = [1.0, 2.0]                        # 1 + 2x, linear ⇒ no interior critical pt
-        for R in (range_bisect(c, 0.0, 3.0), range_critical(c, 0.0, 3.0))
-            sound(R, 1.0, 7.0)
-        end
-        @test range_critical(c, 0.0, 3.0).diag.ncrit == 0
-    end
-
-    @testset "soundness & agreement on random polynomials" begin
-        rng = MersenneTwister(7)
-        for trial in 1:25
-            d = rand(rng, 2:9)
-            c = randn(rng, d + 1)
-            a = -1.0 - rand(rng);
-            b = 1.0 + rand(rng)
-            tlo, thi = ref_range(c, a, b)
-            Rb = range_bisect(c, a, b; tol = 1e-9)
-            Rc = range_critical(c, a, b; refine = 8)
-            sound(Rb, tlo, thi)
-            sound(Rc, tlo, thi)
-            # both pin the extrema to within their reported brackets ⇒ they agree
-            @test Rb.min_lo ≈ Rc.min_lo atol = 1e-5
-            @test Rb.max_hi ≈ Rc.max_hi atol = 1e-5
-        end
-    end
-
-    @testset "Chebyshev T_n — known range [-1,1], non-normal companion" begin
-        # T_n via recurrence; on [-1,1] the range is exactly [-1,1]
-        cheb(n) = (Tm = [1.0]; T = [0.0, 1.0];
-            for _ in 2:n
-                Tn = zeros(length(T) + 1)
-                for i in eachindex(T)
-                    Tn[i + 1] += 2T[i]
-                end
-                for i in eachindex(Tm)
-                    Tn[i] -= Tm[i]
-                end
-                (Tm, T) = (T, Tn)
-            end;
-            n == 0 ? [1.0] : n == 1 ? [0.0, 1.0] : T)
-        for n in (4, 8, 12)
-            c = cheb(n)
-            Rc = range_critical(c, -1.0, 1.0; refine = 10)
-            sound(Rc, -1.0, 1.0)
-            @test Rc.diag.ncrit == n - 1      # all n−1 interior extrema found
-            @test Rc.max_hi - Rc.min_lo < 2 + 1e-4   # tight about [-1,1]
-        end
-    end
-
-    @testset "clustered critical points (ill-conditioned companion)" begin
-        ε = 1e-4                              # (x²−ε)² : roots of p' are 0, ±√ε (clustered)
-        c = [ε^2, 0.0, -2ε, 0.0, 1.0]
-        tlo, thi = 0.0, (1 - ε)^2
-        for R in (range_bisect(c, -1.0, 1.0; tol = 1e-10), range_critical(c, -1.0, 1.0))
-            sound(R, tlo, thi)
-        end
-    end
-
-    @testset "evaluation never exceeds a finer enclosure (rigor)" begin
-        # the critical-point enclosure must contain the bisection enclosure's truth bracket
+    @testset "§2 formulas: rounding direction and eq:farpower" begin
         rng = MersenneTwister(11)
-        for _ in 1:10
-            c = randn(rng, 6)
-            Rb = range_bisect(c, -1.5, 1.5; tol = 1e-11)
-            Rc = range_critical(c, -1.5, 1.5; refine = 8)
-            @test Rc.min_lo <= Rb.min_hi + 1e-7   # critical min-bracket below bisection's upper
-            @test Rc.max_hi >= Rb.max_lo - 1e-7
+        bad = 0
+        N = 20000
+        for _ in 1:N
+            s11, s22, g1, g2 = rand(rng, 4) .* [2, 2, 1, 1]
+            f, ok = assembly_floor(s11, s22, g1, g2)
+            exact = (big(s11) * s22 - big(g1) * g2) / (big(s11) + s22 + g1 + g2)
+            if ok
+                bad += (f > exact || exact <= 0)
+            else
+                bad += (exact > 0 && s11 * s22 - g1 * g2 > 1e-12)
+            end
+            f2, ok2 = blockdom_floor(s11, s22, g1, g2)
+            τ = max(big(g1) / s11, big(g2) / s22)
+            ok2 && (bad += (f2 > min(s11, s22) * (1 - τ)))
+        end
+        @printf("  assembly/blockdom against BigFloat: %d trials, %d violations\n", N, bad)
+        @test bad == 0
+        viol = 0
+        for seed in 1:20
+            r = MersenneTwister(seed)
+            B = triu(randn(r, 12, 12), 1) * 0.5 + 0.1 * randn(r, 12, 12)
+            gs = [opnorm(B^j) * (1 + 1e-12) for j in 1:6]
+            for _ in 1:10
+                z = (0.5 + 3rand(r)) * cis(2π * rand(r))
+                viol += !le(farpower_lo(z, gs), svdvals(B - z * I)[end])
+            end
+        end
+        @printf("  eq:farpower against dense σ_min(G22 − z) with exact ‖G22^j‖: 200 points, %d violations\n",
+            viol)
+        @test viol == 0
+    end
+
+    @testset "random dense trials: every certified quantity against the truth" begin
+        nt = 0
+        viol = Dict{Symbol, Int}()
+        minmargin = Dict{Symbol, Float64}()
+        function rec(key, lo, tru)
+            viol[key] = get(viol, key, 0) + !le(lo, tru)
+            minmargin[key] = min(get(minmargin, key, Inf), (tru - lo) / max(1.0, abs(tru)))
+        end
+        counts_checked = 0
+        discs_checked = 0
+        viol[:enclosure] = 0
+        viol[:clustercount] = 0
+        viol[:extcount] = 0
+        viol[:disccount] = 0
+        configs = collect(Iterators.product((40, 90), (false, true), (3, 8), (0.0, 1e-7),
+            (false, true)))
+        for (trial, (n, cplx, ks, pert, mf)) in enumerate(configs)
+            nt += 1
+            A = decaying(n; seed = trial, cplx)
+            T = cplx ? ComplexF64 : Float64
+            Q, _ = two_sided_frame(x -> A * x, x -> A' * x, n, 0.3; ks, T)
+            if pert > 0
+                Q = Q + pert * randn(MersenneTwister(trial), T, size(Q)...)   # α of order 1e-7
+            end
+            sc = mf ? certify_split(x -> A * x, x -> A' * x, n, Q; epsA = epsA_width(n)) :
+                 certify_split(A, Q)
+            tb = truth_blocks(A, Q)
+            rec(:α, opnorm(I - Q' * Q), sc.α)
+            rec(:γ1, opnorm(tb.G12), sc.γ1)
+            rec(:γ2, opnorm(tb.G21), sc.γ2)
+            rec(:G11norm, opnorm(tb.G11), sc.snorm)
+            rec(:G22norm, opnorm(tb.G22), sc.gbar)
+            rec(:Anorm, opnorm(A), sc.abar)
+            r = MersenneTwister(100 + trial)
+            ev = eigvals(A)
+            zs = [ev[1] + 0.05, ev[2] * 1.1, 0.6 * cis(1.0), 0.4 + 0.3im, -0.9,
+                (0.2 + rand(r)) * cis(2π * rand(r)), (0.2 + rand(r)) * cis(2π * rand(r))]
+            for z in zs
+                rf = resolvent_floor(sc, z)
+                t11 = svdvals(tb.G11 - z * I)[end]
+                rec(:σ11, rf.σ11, t11)
+                rec(:floor, rf.floor, svdvals(A - z * I)[end])
+                rec(:σ11_blocks, sigma11_lo(sc, z; method = :blocks), t11)
+            end
+            # the compression enclosure: each eigenvalue of G11 in exactly one component
+            θ = eigvals(tb.G11)
+            cc = sc.comp.cert
+            ρ = sc.comp.family === :local ? cc.ρlocal : cc.ρglobal
+            comps = RigorousPseudospectra._comps(sc)
+            owner = [findall(C -> any(b -> abs(λ - cc.centres[b]) <= ρ[b] + 1e-12, C.blocks),
+                comps) for λ in θ]
+            viol[:enclosure] += count(o -> length(o) != 1, owner)
+            for (ci, C) in enumerate(comps)
+                viol[:clustercount] += (count(o -> o == [ci], owner) != C.count)
+            end
+            # the exterior (cor:agree) at R in a gap of the spectrum of A
+            ma = sort(abs.(ev); rev = true)
+            R = (ma[3] + ma[4]) / 2
+            ext = certify_exterior(sc, R; nθ = 48)
+            if ext.exterior.ok && ext.exterior.region_ok
+                counts_checked += 1
+                viol[:extcount] += (ext.count != count(>(R), abs.(ev)))
+            end
+            if ext.ok
+                for d in ext.discs
+                    discs_checked += 1
+                    viol[:disccount] += (d.count != count(λ -> abs(λ - d.center) < d.radius, ev))
+                end
+            end
+        end
+        @printf("  %d random trials (n ∈ {40, 90}, real/complex, ks ∈ {3, 8}, α ≈ 0 or 1e-7, stored/matrix-free), 7 points z each\n",
+            nt)
+        for k in sort(collect(keys(minmargin)))
+            @printf("    %-11s violations %d   smallest relative margin (truth − bound)/max(1,truth) %.2e\n",
+                k, viol[k], minmargin[k])
+        end
+        @printf("    enclosure misses %d, cluster-count mismatches %d\n", viol[:enclosure],
+            viol[:clustercount])
+        @printf("    exterior counts certified in %d of %d trials, mismatches %d; isolation discs %d, mismatches %d\n",
+            counts_checked, nt, viol[:extcount], discs_checked, viol[:disccount])
+        @test all(v == 0 for v in values(viol))
+        @test counts_checked > 0
+    end
+
+    @testset "prop:blockgersg localised radii on random block matrices" begin
+        # M = Λ + N with Λ block diagonal and N off-block, exact (β = 0): every eigenvalue must lie in
+        # some {σ_min(P_i − λ) ≤ r_i}. The paper's r_i = Σ_{j≠i}‖N_ij‖; baseline: the false form of
+        # the old code, r_i = ‖N_{C_i,:}‖.
+        function randblock(rng; qmax = 5)
+            q = rand(rng, 2:qmax)
+            sizes = rand(rng, 1:3, q)
+            k = sum(sizes)
+            blocks = Vector{Int}[]
+            p = 0
+            for s in sizes
+                push!(blocks, collect((p + 1):(p + s)))
+                p += s
+            end
+            M = randn(rng, ComplexF64, k, k)
+            scale = 10.0^(rand(rng) * 3 - 2)
+            for (i, bi) in enumerate(blocks), (j, bj) in enumerate(blocks)
+                i != j && (M[bi, bj] .*= scale)
+            end
+            return M, blocks, q, k
+        end
+        rng = MersenneTwister(1)
+        N = 20000
+        miss_paper = 0
+        miss_false = 0
+        for _ in 1:N
+            M, blocks, q, k = randblock(rng)
+            rp = [sum(opnorm(M[blocks[i], blocks[j]]) for j in 1:q if j != i) for i in 1:q]
+            rf = [opnorm(M[blocks[i], setdiff(1:k, blocks[i])]) for i in 1:q]
+            for λ in eigvals(M)
+                s = [svdvals(M[b, b] - λ * I)[end] for b in blocks]
+                miss_paper += !any(s .<= rp .* (1 + 1e-9) .+ 1e-12)
+                miss_false += !any(s .<= rf .* (1 + 1e-9) .+ 1e-12)
+            end
+        end
+        @printf("  exact norms, %d random block matrices: eigenvalues outside every region: paper's r_i %d, false r_i (old code) %d\n",
+            N, miss_paper, miss_false)
+        @test miss_paper == 0
+        # the certified radii of certify_compression with the trivial candidate W = Y = I
+        miss_cert = 0
+        Nc = 1000
+        for _ in 1:Nc
+            M, blocks, q, k = randblock(rng; qmax = 4)
+            Λ = zeros(ComplexF64, k, k)
+            for b in blocks
+                Λ[b, b] .= M[b, b]
+            end
+            Id = Matrix{ComplexF64}(I, k, k)
+            cc = certify_compression(M, CompressionCandidate(Id, Id, Λ, blocks, :given, (;)))
+            for λ in eigvals(M)
+                s = [svdvals(M[b, b] - λ * I)[end] for b in blocks]
+                inreg = any(s .<= cc.rloc)
+                indisc = any(abs(λ - cc.centres[i]) <= cc.ρlocal[i] for i in 1:q)
+                miss_cert += !(inreg && indisc)
+            end
+        end
+        @printf("  certified localised radii of certify_compression, %d matrices: misses %d\n", Nc,
+            miss_cert)
+        @test miss_cert == 0
+    end
+
+    @testset "compression: Sylvester and Newton candidates contain the spectrum" begin
+        mats = [(e.name, e.A) for e in gallery()]
+        push!(mats, ("jordan8+1e-10", jordan_block(8) + 1e-10 * randn(MersenneTwister(3), 8, 8)))
+        for seed in 1:3
+            rng = MersenneTwister(seed)
+            push!(mats, ("nonnormal$seed", triu(randn(rng, ComplexF64, 20, 20)) .*
+                                             [2.0^(-abs(i - j) / 2) for i in 1:20, j in 1:20]))
+        end
+        nok = 0
+        for (name, A) in mats, method in (:sylvester, :newton)
+            R = miyajima_rump(A; method)
+            R.ok || continue
+            nok += 1
+            ev = eigvals(Matrix(A))
+            @test all(λ -> any(C -> abs(λ - C.hull_center) <= C.hull_radius + 1e-12, R.clusters),
+                ev)
+            @test sum(C -> C.count, R.clusters) == size(A, 1)
+        end
+        @printf("  %d of %d (matrix, candidate) pairs certified ‖R2‖ < 1\n", nok, 2length(mats))
+    end
+
+    @testset "far block: the sweep certificate against ‖G22‖" begin
+        rows = Any[]
+        # (a) stored sparse
+        rng = MersenneTwister(5)
+        n = 1500
+        S = sprandn(rng, n, n, 3 / n) + 0.3I
+        Q = Matrix(qr(randn(rng, n, 12)).Q)
+        sc = certify_split(S, Q; compression = false)
+        tru = opnorm(truth_blocks(Matrix(S), Q).G22)
+        push!(rows, ("sparse stored", n, 12, sc.far.m, tru, sc.gbar, sc.abar / opnorm(Matrix(S)),
+            sc.far.passed))
+        @test le(tru, sc.gbar) && le(opnorm(Matrix(S)), sc.abar)
+        # (b) stencil, matrix-free
+        n1, n2 = 36, 30
+        n = n1 * n2
+        c = (0.5, 0.2, 0.05, 0.15, 0.1)
+        Amul(x) = stencil_mul(x, n1, n2, c...)
+        Aadj(x) = stencil_mul(x, n1, n2, c[1], c[3], c[2], c[5], c[4])
+        Ad = hcat([Amul(Matrix(1.0I, n, n)[:, j]) for j in 1:n]...)
+        Qs, _ = two_sided_frame(Amul, Aadj, n, 0.6; ks = 10)
+        trus = opnorm(truth_blocks(Ad, Qs).G22)
+        for ord in (2, 6, :auto)
+            scs = certify_split(Amul, Aadj, n, Qs; epsA = epsA_width(5),
+                etaA = sqrt(n) * 5 * 2.0^-1074 * 2, order = ord, compression = false)
+            push!(rows, ("stencil matrix-free, order $ord", n, size(Qs, 2), scs.far.m, trus,
+                scs.gbar, scs.abar / opnorm(Ad), scs.far.passed))
+            @test le(trus, scs.gbar) && le(opnorm(Ad), scs.abar)
+        end
+        # (c) dense complex, deep deflation
+        A = decaying(300; ρ = 0.8, seed = 9, cplx = true)
+        Qd, _ = two_sided_frame(x -> A * x, x -> A' * x, 300, 0.1; ks = 25, T = ComplexF64)
+        scd = certify_split(A, Qd; compression = false)
+        trud = opnorm(truth_blocks(A, Qd).G22)
+        push!(rows, ("dense complex", 300, size(Qd, 2), scd.far.m, trud, scd.gbar,
+            scd.abar / opnorm(A), scd.far.passed))
+        @test le(trud, scd.gbar) && le(opnorm(A), scd.abar)
+        # (d) no frame: the certificate bounds ‖A‖ itself
+        A0 = randn(MersenneTwister(2), 200, 200) / 20
+        sc0 = certify_split(A0, zeros(200, 0); compression = false)
+        push!(rows, ("no frame (k = 0)", 200, 0, sc0.far.m, opnorm(A0), sc0.gbar,
+            sc0.abar / opnorm(A0), sc0.far.passed))
+        @test le(opnorm(A0), sc0.gbar)
+        println("  far block: certified ḡ against the dense ‖G22‖ (threads: $(Threads.nthreads()))")
+        @printf("    %-34s %6s %4s %4s %13s %13s %8s %8s\n", "operator", "n", "k", "m", "‖G22‖",
+            "ḡ", "ā/‖A‖", "passed")
+        for r in rows
+            @printf("    %-34s %6d %4d %4d %13.6e %13.6e %8.4f %8s\n", r...)
         end
     end
-end
 
-@testset "matrix-free Krylov resolvent floor on a circle" begin
-    # mildly non-normal A with a clear leading eigenvalue λ₁=1 and a spectral gap;
-    # the matvec block certificate must (a) be SOUND (floor ≤ true σ_min on Γ) and
-    # (b) FIRE (positive whole-circle floor) when the radius stays inside the gap.
-    rng = MersenneTwister(7)
-    n = 120
-    d = vcat(1.0 + 0im, 0.5 .* (2 .* rand(rng, ComplexF64, n - 1) .- (1 + im)))
-    A = Matrix(Diagonal(d)) + triu(0.02 .* randn(rng, ComplexF64, n, n), 1)
-    F = eigen(A)
-    i1 = argmax(abs.(F.values))
-    w1 = F.vectors[:, i1]
-    c = F.values[i1]
-
-    @testset "soundness + certification at radius ρ=$ρ" for ρ in (0.15, 0.25)
-        cert = certify_gap_on_circle(A, w1, c, ρ; nθ = 32)        # default kmax = full basis
-        truemin = minimum(minimum(svdvals(A - (c + ρ * cis(2π * t / 32)) * I))
-        for t in 0:31)
-        @test cert.floor <= truemin + 1e-9                       # rigor: never exceed the truth
-        @test cert.certified                                     # fires inside the gap
-        @test cert.floor > 0
+    @testset "Hermitian: cor:selfadj, cor:weyl, rem:lanczos" begin
+        rng = MersenneTwister(21)
+        n = 300
+        λbig = [10.0, 7.0, 5.0, -8.0, -6.0]
+        λ = vcat(λbig, 2rand(rng, n - 5) .- 1)
+        U = Matrix(qr(randn(rng, n, n)).Q)
+        A = U * Diagonal(λ) * U'
+        A = (A + A') / 2
+        out = certify_selfadjoint(A; L = 60, tol = 1e-10)
+        sc = out.split
+        @test sc.hermitian
+        tb = truth_blocks(A, sc.Q)
+        @test le(opnorm(tb.G22), sc.gbar) && le(opnorm(tb.G21), out.γ̄)
+        ev = eigvals(Symmetric(A))
+        # (i): every eigenvalue of A with |λ| > ḡ lies in the union of the enclosure intervals
+        @test all(x -> abs(x) <= sc.gbar || any(e -> e.lo <= x <= e.hi, out.enclosure), ev)
+        ρs = [max(e.ρplus, e.ρminus) for e in out.enclosure if e.J > 0]
+        @printf("  Lanczos frame k = %d, ḡ = %.3e, γ̄ = %.3e, largest quadratic radius %.3e (γ̄²/(10 − ḡ) = %.3e)\n",
+            sc.k, sc.gbar, out.γ̄, maximum(ρs; init = 0.0), out.γ̄^2 / (10 - sc.gbar))
+        # (ii): counts on intervals around each extreme eigenvalue
+        for x in λbig
+            cnt, ok = selfadj_count(out.θ, sc.gbar, out.γ̄, x - 0.5, x + 0.5)
+            @test ok
+            @test cnt == count(e -> x - 0.5 <= e <= x + 0.5, ev)
+        end
+        w = out.weyl
+        @test w.ok
+        evd = sort(ev; rev = true)
+        @test all(t -> t.lo <= evd[t.i] <= t.hi, w.top)
+        @test all(t -> t.lo <= evd[t.i] <= t.hi, w.bottom)
+        @test evd[w.jplus + 1] <= w.top_rest
+        @test evd[n - w.jminus] >= w.bottom_rest
+        @test w.jplus == 3 && w.jminus == 2
     end
 
-    @testset "per-z floor: ‖R₂‖<1 (selective reorth) and sound" begin
-        fl, info = krylov_resolvent_floor(A, w1, c + 0.2)
-        @test info.R2 < 1                                        # orthogonality retained
-        @test fl <= minimum(svdvals(A - (c + 0.2) * I)) + 1e-9   # sound
-        @test fl > 0
+    @testset "matrix-free pipeline: certify_gap and certify_leading_eigs" begin
+        n = 160
+        A = decaying(n; ρ = 0.6, seed = 42, nbig = 3)
+        Amul(x) = A * x
+        Aadj(x) = A' * x
+        ev = eigvals(A)
+        ma = sort(abs.(ev); rev = true)
+        g = certify_gap(Amul, Aadj, n; epsA = epsA_width(n), R = (ma[1] + ma[2]) / 2)
+        @printf("  certify_gap: certified = %s, R = %.3f, |λ1| = %.3f, |λ2| = %.3f, dim Q = %d, ḡ = %.3e\n",
+            g.certified, g.R, ma[1], ma[2], g.split.k, g.split.gbar)
+        @test g.certified
+        @test count(>(g.R), abs.(ev)) == 1
+        L = certify_leading_eigs(Amul, Aadj, n; epsA = epsA_width(n), R = (ma[3] + ma[4]) / 2)
+        @printf("  certify_leading_eigs: ok = %s, R = %.3f, count = %d, disc radii %s\n", L.ok, L.R,
+            L.count, string(round.([d.radius for d in L.discs]; sigdigits = 3)))
+        @test L.ok
+        @test L.count == count(>(L.R), abs.(ev))
+        for d in L.discs
+            @test d.count == count(λ -> abs(λ - d.center) < d.radius, ev)
+        end
+        sc = L.split
+        # prop:count on a union of overlapping discs strung between two eigenvalues
+        λs = ev[sortperm(abs.(ev); rev = true)][1:3]
+        for (a, b) in ((λs[1], λs[3]), (λs[1], λs[2]))
+            cs = [a + t * (b - a) for t in range(-0.1, 1.1; length = 7)]
+            rr = fill(0.12 * abs(b - a), 7)
+            U = count_union(sc, cs, rr; nθ = 48)
+            inU(λ) = any(i -> abs(λ - cs[i]) < rr[i], 1:7)
+            if U.ok
+                @test length(U.members) == 1
+                @test U.counts[1] == count(inU, ev)
+            end
+            @printf("  count_union between %.3f%+.3fi and %.3f%+.3fi: ok = %s (region %s, contour %s), count %s, dense count %d\n",
+                real(a), imag(a), real(b), imag(b), U.ok, U.region_ok, U.contour_ok,
+                U.ok ? string(U.counts) : "-", count(inU, ev))
+        end
+        for z in (1.5, 1.2im, -1.3 + 0.4im)
+            @test le(resolvent_floor(sc, z).floor, svdvals(A - z * I)[end])
+        end
+        # prop:complete: σ_min(A − z) ≤ δ at |z| > R implies σ_min(G11 − z) ≤ ε
+        δ, ok = pseudospectrum_outside(sc, 0.05, L.R)
+        @test ok
+        tb = truth_blocks(A, sc.Q)
+        rng = MersenneTwister(1)
+        nhit = 0
+        npts = 0
+        λout = ev[abs.(ev) .> L.R]
+        for _ in 1:400
+            # half the points uniform in an annulus, half within 0.08 of an exterior eigenvalue
+            z = isodd(npts) ? (L.R * 1.001 + 0.5rand(rng)) * cis(2π * rand(rng)) :
+                rand(rng, λout) + 0.08rand(rng) * cis(2π * rand(rng))
+            abs(z) > L.R || continue
+            npts += 1
+            if svdvals(A - z * I)[end] <= δ
+                nhit += 1
+                @test svdvals(tb.G11 - z * I)[end] <= 0.05 + TOL
+            end
+        end
+        @printf("  prop:complete, ε = 0.05, R = %.3f: δ = %.3e; %d points with |z| > R, %d of them with σ_min(A − zI) ≤ δ\n",
+            L.R, δ, npts, nhit)
+        @test nhit > 0
     end
 
-    @testset "radius beyond the gap fails to certify" begin
-        # ρ large enough to swallow part of σ(A)∖{λ₁}: the floor must NOT certify a gap
-        cert = certify_gap_on_circle(A, w1, c, 0.9; nθ = 32)
-        @test !cert.certified
+    @testset "prop:projector: the spectral projector" begin
+        # dense Riesz projector of M for the eigenvalues selected by `sel`
+        function riesz(M, sel)
+            F = eigen(ComplexF64.(Matrix(M)))
+            return F.vectors * Diagonal(ComplexF64.(sel.(F.values))) * inv(F.vectors)
+        end
+        # an orthonormal basis of the range of a projector of rank k (its leading left singular
+        # vectors), and the gap between two subspaces given by bases
+        rangebasis(P, k) = k <= 0 ? zeros(ComplexF64, size(P, 1), 0) :
+                           svd(ComplexF64.(Matrix(P))).U[:, 1:k]
+        function rangegap(B1, B2)
+            (size(B1, 2) == 0 || size(B2, 2) == 0) && return 0.0
+            Π1 = (U = Matrix(qr(ComplexF64.(B1)).Q)[:, 1:size(B1, 2)]; U * U')
+            Π2 = (U = Matrix(qr(ComplexF64.(B2)).Q)[:, 1:size(B2, 2)]; U * U')
+            return max(opnorm((I - Π2) * Π1), opnorm((I - Π1) * Π2))
+        end
+        ratios = Float64[]
+        ncontour = 0
+        println("  prop:projector: bound r·M·M₀·max(γ1, γ2) against the dense ‖P − P₀‖")
+        println("  radius sweep from the radius certify_exterior returns up to the largest the ",
+            "hypothesis of prop:count allows (full table for the first operator, best row for the rest)")
+        @printf("    %-22s %9s %9s %9s %11s %11s %10s\n", "contour", "r", "M", "M₀", "bound",
+            "‖P − P₀‖", "ratio")
+        for (trial, (n, cplx)) in enumerate(Iterators.product((60, 120), (false, true)))
+            A = decaying(n; ρ = 0.6, seed = 40 + trial, cplx)
+            ev = eigvals(A)
+            ma = sort(abs.(ev); rev = true)
+            R = (ma[3] + ma[4]) / 2
+            L = certify_leading_eigs(x -> A * x, x -> A' * x, n; epsA = epsA_width(n), R)
+            L.ok || continue
+            sc = L.split
+            Z = sc.Q / sqrt(Hermitian(sc.Q' * sc.Q))
+            G11 = Z' * A * Z
+            tag = "n = $n $(cplx ? "cplx" : "real")"
+            # the exterior circle |z| = R
+            pc = certify_projector(sc, 0.0, R; region = :exterior)
+            @test pc.ok
+            sel = λ -> abs(λ) > R
+            P = riesz(A, sel)
+            P0 = Z * riesz(G11, sel) * Z'
+            tru = opnorm(P - P0)
+            @test le(tru, pc.bound)
+            @test le(opnorm(P), pc.normP)
+            @test le(rangegap(rangebasis(P, pc.count), rangebasis(P0, pc.count)), pc.gap)
+            @test le(rangegap(rangebasis(P0, pc.count), pc.basis), pc.subspace_gap)
+            push!(ratios, pc.bound / tru)
+            ncontour += 1
+            @printf("    %-22s %9.3g %9.3g %9.3g %11.3e %11.3e %10.1f\n", "$tag, exterior R",
+                R, pc.M, pc.M0, pc.bound, tru, pc.bound / tru)
+            # each isolation disc, swept in the radius
+            for d in L.discs
+                c = d.center
+                far = [abs(λ - c) for λ in ev if abs(λ - c) > 2d.radius]
+                rmax = min(abs(c) - R, 0.45 * minimum(far))
+                rmax > d.radius || continue
+                best = (; ratio = Inf, r = NaN, M = NaN, M0 = NaN, bound = NaN, tru = NaN)
+                nrad = 0
+                # the full sweep on the first operator, four radii on the others (each contour
+                # costs an arc cover); nθ = 64: with fewer samples the tight contours spend the
+                # budget on bisection instead
+                radii = exp.(range(log(d.radius), log(rmax); length = trial == 1 ? 8 : 4))
+                for (ir, r) in enumerate(radii)
+                    # the compression-level certificate only at the ends of the sweep (it costs a
+                    # second arc cover and does not depend on the dense comparison)
+                    sub = ir == 1 || ir == length(radii)
+                    pcd = certify_projector(sc, c, r; subspace = sub)
+                    pcd.ok || continue
+                    seld = λ -> abs(λ - c) < r
+                    sub && (count(seld, ev) == pcd.count || continue)
+                    Pd = riesz(A, seld)
+                    P0d = Z * riesz(G11, seld) * Z'
+                    t = opnorm(Pd - P0d)
+                    @test le(t, pcd.bound)
+                    if sub && isfinite(pcd.subspace_gap)
+                        @test le(rangegap(rangebasis(P0d, pcd.count), pcd.basis),
+                            pcd.subspace_gap)
+                        @test le(rangegap(rangebasis(Pd, pcd.count), rangebasis(P0d, pcd.count)),
+                            pcd.gap)
+                    end
+                    push!(ratios, pcd.bound / t)
+                    ncontour += 1
+                    nrad += 1
+                    rr = pcd.bound / t
+                    rr < best.ratio && (best = (; ratio = rr, r, M = pcd.M, M0 = pcd.M0,
+                        bound = pcd.bound, tru = t))
+                    trial == 1 && @printf("    %-22s %9.3g %9.3g %9.3g %11.3e %11.3e %10.1f\n",
+                        "  disc λ ≈ $(round(real(c); sigdigits = 3))", r, pcd.M, pcd.M0,
+                        pcd.bound, t, rr)
+                end
+                nrad == 0 && continue
+                @printf("    %-22s %9.3g %9.3g %9.3g %11.3e %11.3e %10.1f   (best of %d radii, r_max = %.3g)\n",
+                    "  best, λ ≈ $(round(real(c); sigdigits = 3))", best.r, best.M, best.M0,
+                    best.bound, best.tru, best.ratio, nrad, rmax)
+            end
+        end
+        @printf("    %d contours: ratio bound/truth min %.3g, median %.3g, max %.3g\n",
+            length(ratios), minimum(ratios), sort(ratios)[cld(length(ratios), 2)],
+            maximum(ratios))
+        @test ncontour > 0
+        @test minimum(ratios) >= 1
+
+        # the same inside sec:vbd: the invariant subspaces of the compression
+        println("  prop:projector inside sec:vbd (bound against ‖P_{M_c,S} − P_{Λ,S}‖)")
+        @printf("    %-16s %5s %9s %9s %11s %11s %10s\n", "matrix", "dim", "M", "M₀", "bound",
+            "truth", "ratio")
+        rat2 = Float64[]
+        mats = [("normal16", normal_random(16)), ("grcar32", grcar(32)),
+            ("two_clusters", two_clusters()), ("chain", graded_chain(12)),
+            ("randn30", randn(MersenneTwister(8), ComplexF64, 30, 30))]
+        for (name, A) in mats
+            Ac = ComplexF64.(Matrix(A))
+            R = miyajima_rump(Ac)
+            R.ok || continue
+            cc = R.cert
+            W = cc.candidate.W
+            Mc = W \ (Ac * W)
+            i = argmax(abs.(cc.centres))
+            c = cc.centres[i]
+            others = [j for j in eachindex(cc.centres) if j != i]
+            isempty(others) && continue
+            rr = 0.45 * minimum(abs.(cc.centres[others] .- c))
+            bp = certify_block_projector(cc, c, rr; family = R.family)
+            bp.ok || continue
+            PΛ = Diagonal([j in bp.cols ? 1.0 + 0im : 0.0 + 0im for j in 1:(cc.k)])
+            PM = riesz(Mc, λ -> abs(λ - c) < rr)
+            t = opnorm(PM - PΛ)
+            @test le(t, bp.bound)
+            push!(rat2, bp.bound / max(t, eps()))
+            @printf("    %-16s %5d %9.3g %9.3g %11.3e %11.3e %10.1f\n", name, bp.count, bp.M,
+                bp.M0, bp.bound, t, bp.bound / max(t, eps()))
+        end
+        @test !isempty(rat2)
+        @test minimum(rat2) >= 1
     end
-end
 
-@testset "Krylov–Rump–Miyajima eigenvalue decoupling" begin
-    # leading eigenvalues of a non-normal matrix certified isolated end-to-end:
-    # Arnoldi → miyajima_rump (refined block-diagonal) → per-cluster resolvent circle.
-    rng = MersenneTwister(7)
-    n = 160
-    d = vcat(1.0 + 0im, 0.6 .* (2 .* rand(rng, ComplexF64, n - 1) .- (1 + im)))
-    A = Matrix(Diagonal(d)) + triu(0.03 .* randn(rng, ComplexF64, n, n), 1)
-    # The spectrum here is |λ| = 1.000, 0.794, 0.757, 0.753, 0.734: the dominant eigenvalue is
-    # well separated, the next four form a tight cloud whose mutual gaps are ~4e-3. Only the
-    # DOMINANT one can be isolated — the method certifies what is separated and declines on the
-    # rest, so we assert exactly that, plus soundness (the real rigor test) on every result.
-    # `nblock` must be large enough that the deflated far block is genuinely below the target:
-    # at nblock=16 the certified ‖G₂₂‖ is 0.94, above |λ₂|, and nothing can certify.
-    out = certify_leading_eigs(A; nblock = 80, neig = 4, refine = 6)
-    @test length(out.results) >= 1
-    @test out.results[1].cert.certified                          # dominant eigenvalue isolated
-    @test out.results[1].cert.floor > 0
-    @testset "soundness $k" for (k, r) in enumerate(out.results)
-        # the certified floor must NEVER exceed the true σ_min on the circle — the primary
-        # regression test, and it must hold whether or not the circle certifies.
-        truemin = minimum(minimum(svdvals(A -
-                                          (r.λ + r.cert.radius * cis(2π * t / 24)) * I))
-        for t in 0:23)
-        @test r.cert.floor <= truemin + 1e-9
+    @testset "split by modulus: sigma, components, counts and the pipeline" begin
+        # (a) the compression alone, against dense truth
+        function planted(n, nout; seed = 1, scale = 5.0)
+            rng = MersenneTwister(seed)
+            A = randn(rng, ComplexF64, n, n) / sqrt(n)
+            F = eigen(A)
+            d = F.values
+            p = sortperm(abs.(d); rev = true)
+            d[p[1:nout]] .*= scale
+            return F.vectors * Diagonal(d) / F.vectors
+        end
+        mats = [("planted40", planted(40, 3; seed = 1)), ("planted90", planted(90, 5; seed = 2)),
+            ("planted60", planted(60, 2; seed = 3)), ("normal50", normal_random(50; seed = 4)),
+            ("chain40", ComplexF64.(graded_chain(40))),
+            ("two_clusters", ComplexF64.(two_clusters()))]
+        nz = 0
+        ncnt = 0
+        ndecl = 0
+        worst = Inf
+        for (name, G) in mats
+            a = sort(abs.(eigvals(G)); rev = true)
+            js = [j for j in (2, 4) if j < length(a) && a[j] > a[j + 1] * (1 + 1e-8)]
+            for j in js
+                R = sqrt(a[j] * a[j + 1])
+                ms = split_compression(G, R)
+                ms.cert_ok || continue
+                ms.ok || (ndecl += 1)
+                @test ms.reason in (:ok, :r2, :radius, :cost)
+                ev = eigvals(G)
+                # (i) the resolvent bound is below the truth
+                for ρ in (1.0, 1.2, 2.0), t in 0:11
+                    z = ρ * R * cis(2π * t / 12)
+                    lo = sigma_split_lo(ms, z)
+                    tr = minimum(svdvals(G - z * I))
+                    @test le(lo, tr)
+                    nz += 1
+                    lo > 0 && (worst = min(worst, lo / tr))
+                end
+                # (ii) the certified bound on the powers of the trailing block is above the
+                # spectral radius of that block
+                @test le(ms.rho_fp, ms.gbarJ)
+                # (iii) every eigenvalue lies in some certified component, the counts partition
+                # the spectrum, and each component's disc holds at least its own count (the hull
+                # disc of a merged component may also cover eigenvalues of a disjoint one)
+                comps = split_components(ms)
+                @test all(λ -> any(C -> abs(λ - C.center) <= C.radius * (1 + 1e-10), comps), ev)
+                @test sum(C -> C.count, comps; init = 0) == size(G, 1)
+                for C in comps
+                    @test C.count <= count(λ -> abs(λ - C.center) <= C.radius, ev)
+                end
+                # (iv) the count outside R, when certified, is the dense count
+                cnt, okc = eigencount_outside(comps, R)
+                if okc
+                    ncnt += 1
+                    @test cnt == count(λ -> abs(λ) > R, ev)
+                end
+            end
+        end
+        @printf("  split: %d points of σ below the truth (smallest positive ratio %.2e), %d certified counts, %d declines (k₊ ceiling or ḡ_J ≥ R)\n",
+            nz, worst, ncnt, ndecl)
+        # the ceiling is honoured and the decline is reported, never silently exceeded
+        for (_, G) in mats
+            a = sort(abs.(eigvals(G)); rev = true)
+            j = 2
+            j < length(a) || continue
+            R = sqrt(a[j] * a[j + 1])
+            for kmax in (3, 20)
+                ms = split_compression(G, R; kmax)
+                @test ms.kplus <= kmax
+                @test ms.ok == (ms.reason === :ok)
+                @test ms.reason in (:ok, :r2, :radius, :cost)
+                ms.ok || @test occursin("k₊", split_reason(ms)) || occursin("ḡ_J",
+                    split_reason(ms))
+                # the stopping rule reports what the condition wanted and what it would cost
+                ms.reason === :cost && (@test ms.kwanted > kmax; @test ms.tz > 0)
+            end
+            # a budget in seconds per z reaches the same decline
+            let msb = split_compression(G, R; budget = 1e-12)
+                @test msb.reason in (:cost, :r2, :radius)
+                msb.reason === :cost && (@test msb.tz > 1e-12)
+            end
+        end
+
+        # (b) the whole pipeline with the split as the compression layer
+        rng = MersenneTwister(11)
+        n = 400
+        d = [1.0, 0.8, 0.79, 0.6]
+        A = triu(randn(rng, n, n) / sqrt(n), 1) * 0.15
+        A += Diagonal([i <= 4 ? d[i] : 0.3 * randn(rng) for i in 1:n])
+        Q = Matrix(qr(hcat([A^j * randn(rng, n) for j in 0:79]...)).Q)[:, 1:80]
+        R = 0.7
+        for mode in (:split, :full)
+            sc = certify_split(A, Q; target = R, compression = mode)
+            @test (mode === :split) == (sc.msplit !== nothing)
+            ext = certify_exterior(sc, R)
+            if ext.exterior.ok && ext.count > 0
+                @test ext.count == count(λ -> abs(λ) > R, eigvals(A))
+            end
+            @printf("  pipeline %-6s: dim Q = %d, count = %d (ok %s), σ11(R) = %.3e, %.2f s\n",
+                mode, sc.k, ext.count, ext.ok, sigma11_lo(sc, R + 0im), sc.time.compression)
+        end
     end
-end
 
-@testset "certify_gap: large block + block-diagonal resolvent + deep far block" begin
-    # LOW-RANK A (rank 6): a 6×6 non-normal block (λ₁=1 + fast modes) embedded by a BigFloat-
-    # native isometry, the rest 0. Arnoldi breaks at the rank, miyajima_rump block-diagonalizes
-    # the small block, the far block is ≈0 (deep). nsep=1: separate λ₁=1 from the rest.
-    setprecision(BigFloat, 160)
-    rng = MersenneTwister(11)
-    n = 80
-    Bd = [1.0+0im 0.3 0.2 0.1 0.05 0.05; 0 0.45 0.2 0.1 0.05 0.05;
-          0 0 0.40 0.15 0.05 0.05; 0 0 0 -0.35 0.1 0.05;
-          0 0 0 0 0.30+0.1im 0.1; 0 0 0 0 0 0.30-0.1im]
-    Q = Matrix(qr(randn(rng, Complex{BigFloat}, n, 6)).Q)
-    A = Q * Complex{BigFloat}.(Bd) * Q'
-    rgap = 0.7                                            # separate λ₁=1 from |λ|≤0.45
-    fl, info = certify_gap(x -> A * x, x -> A' * x, n; nsep = 1, radius = rgap,
-        nθ = 48, prec = BigFloat)
-    @test info.certified                                  # gap certified
-    @test fl > 0
-    @test info.R2 < 1                                     # far-block Neumann valid at every sample
-    truemin = minimum(minimum(svdvals(ComplexF64.(A) - rgap * cis(2π * t / 48) * I))
-    for t in 0:47)
-    @test fl <= truemin + 1e-9                            # sound (floor ≤ true σ_min on Γ_gap)
-end
+    @testset "deep split: the reduced frame, its couplings and its far block" begin
+        # A matrix whose frame decouples: a decaying singular tail plus a few outliers.
+        function planted(n, nout; seed = 1, scale = 6.0)
+            rng = MersenneTwister(seed)
+            A = randn(rng, ComplexF64, n, n) / sqrt(n)
+            F = eigen(A)
+            d = F.values
+            p = sortperm(abs.(d); rev = true)
+            d[p[1:nout]] .*= scale
+            return F.vectors * Diagonal(d) / F.vectors
+        end
+        # A frame that decouples: A is built block triangular in a random orthonormal basis, with a
+        # small far block and small couplings, so that the gate γ1γ2 < R(R − ḡ) holds and the deep
+        # cut has something to do. `Q` is the first k columns of the same basis.
+        function decoupled(n, k, nout; seed = 1, gfar = 0.15, cpl = 0.02)
+            rng = MersenneTwister(seed)
+            V = Matrix(qr(randn(rng, ComplexF64, n, n)).Q)
+            A11 = randn(rng, ComplexF64, k, k) / sqrt(k)
+            F = eigen(A11)
+            d = F.values
+            p = sortperm(abs.(d); rev = true)
+            d[p[1:nout]] .*= 6.0
+            A11 = F.vectors * Diagonal(d) / F.vectors
+            A22 = randn(rng, ComplexF64, n - k, n - k)
+            A22 .*= gfar / opnorm(A22)
+            B = randn(rng, ComplexF64, n - k, k)
+            B .*= cpl / opnorm(B)
+            C = randn(rng, ComplexF64, k, n - k)
+            C .*= cpl / opnorm(C)
+            A = V * [A11 C; B A22] * V'
+            return A, V[:, 1:k], sort(abs.(eigvals(A11)); rev = true)
+        end
+        ncase = 0
+        nbadc = 0
+        nbadf = 0
+        ndecl = 0
+        nclose = 0
+        worst = Inf
+        cases = Any[]
+        for (nm, n, k, nout, seed) in [("decoupled200", 200, 60, 3, 11),
+            ("decoupled300", 300, 80, 4, 12), ("decoupled150", 150, 50, 2, 13)]
+            A, Q, aa = decoupled(n, k, nout; seed)
+            push!(cases, (nm, A, Q, sqrt(aa[nout] * aa[nout + 1])))
+        end
+        # one case that should decline: a Krylov frame on a matrix with no decaying tail
+        let A = planted(120, 3; seed = 21), n = 120
+            rng = MersenneTwister(5)
+            Q = Matrix(qr(hcat([A^j * randn(rng, ComplexF64, n) for j in 0:39]...)).Q)[:, 1:40]
+            aa = sort(abs.(eigvals(A)); rev = true)
+            push!(cases, ("krylov120", A, Q, sqrt(aa[3] * aa[4])))
+        end
+        for (nm, A, Q, R) in cases
+            sc = certify_split(A, Q; target = R, compression = :none)
+            ds = deep_split(sc, R)
+            ncase += 1
+            if !ds.ok
+                ndecl += 1
+                @test ds.reason in (:cost, :farblock, :nocut)
+                @test !isempty(deep_reason(ds))
+                continue
+            end
+            # the derived bounds against the exact blocks of the reduced frame
+            Qn = Q * ds.U
+            Zn = Matrix(qr(Qn).Q)[:, 1:size(Qn, 2)]
+            Pn = I - Zn * Zn'
+            g1t = opnorm(Zn' * A * Pn)
+            g2t = opnorm(Pn * A * Zn)
+            G22t = Pn * A * Pn
+            gt = opnorm(G22t)
+            @test le(g1t, ds.gamma1n)
+            @test le(g2t, ds.gamma2n)
+            @test le(gt, ds.gbars[1])
+            for j in 2:length(ds.gbars)
+                @test le(opnorm(G22t^j), ds.gbars[j])
+            end
+            ds.gamma1n >= g1t || (nbadc += 1)
+            nclose += 1
+            # the reduced certificate is sound where it claims a floor
+            sc2 = deep_certificate(sc, ds; compression = :full)
+            @test le(opnorm(Zn' * A * Zn), sc2.snorm)
+            for ρ in (1.0, 1.3, 2.0), t in 0:7
+                z = ρ * R * cis(2π * t / 8)
+                f = resolvent_floor(sc2, z; method = :svd).floor
+                tr = minimum(svdvals(A - z * I))
+                @test le(f, tr)
+                f > tr * (1 + TOL) && (nbadf += 1)
+                f > 0 && (worst = min(worst, f / tr))
+            end
+            @printf("  deep %-12s dim Q %d -> %d (E|N|D = %d|%d|%d), ḡ' ≤ %.4g (true %.4g), γ'₁ ≤ %.3e (true %.3e), γ'₂ ≤ %.3e (true %.3e)\n",
+                nm, sc.k, sc2.k, ds.kE, ds.kN, ds.kD, ds.gbars[1], gt, ds.gamma1n, g1t,
+                ds.gamma2n, g2t)
+        end
+        @printf("  deep: %d cases, %d closed, %d declined with a named obstruction, %d coupling bounds below the truth, %d floors above the truth (smallest positive ratio %.2e)\n",
+            ncase, nclose, ndecl, nbadc, nbadf, worst)
+        @test nbadc == 0
+        @test nbadf == 0
+        @test nclose >= 2
 
-@testset "certify_gap: separate leading nsep, near-circle modes carried by the block" begin
-    # NON-NORMAL spectrum with modes near the circle. nsep=4 separates {1,0.6,0.58,0.55} from
-    # {0.2,0.15}; the auto-radius lands in that gap, the block-diagonal resolvent carries the
-    # near-circle smallness exactly, and the far block is ≈0.
-    setprecision(BigFloat, 160)
-    rng = MersenneTwister(7)
-    n = 70
-    ev = Complex{BigFloat}[1.0, 0.60, 0.58, -0.55, 0.20, 0.15]
-    m = length(ev)
-    B = diagm(ev) + Complex{BigFloat}.(triu(0.06 * ones(m, m), 1))   # mild non-normal
-    Q = Matrix(qr(randn(rng, Complex{BigFloat}, n, m)).Q)
-    A = Q * B * Q'
-    fl, info = certify_gap(x -> A * x, x -> A' * x, n; nsep = 4, nθ = 64, prec = BigFloat)
-    @test info.certified                                  # gap certified
-    @test fl > 0
-    @test info.R2 < 1
-    @test 0.2 < info.radius < 0.55                        # auto-radius in the |λ₄|–|λ₅| gap
-    truemin = minimum(minimum(svdvals(ComplexF64.(A) - info.radius * cis(2π * t / 64) * I))
-    for t in 0:63)
-    @test fl <= truemin + 1e-9                            # sound
+        # the 2×2 monotone bound against a real block matrix
+        rng = MersenneTwister(21)
+        for _ in 1:20
+            n1, n2 = rand(rng, 2:6), rand(rng, 2:6)
+            B = randn(rng, n1 + n2, n1 + n2)
+            a = opnorm(B[1:n1, 1:n1])
+            b = opnorm(B[1:n1, (n1 + 1):end])
+            c = opnorm(B[(n1 + 1):end, 1:n1])
+            d = opnorm(B[(n1 + 1):end, (n1 + 1):end])
+            gs, _ = merged_far_bounds(a, b, c, d, 5)
+            for j in 1:5
+                @test le(opnorm(B^j), gs[j])
+            end
+        end
+    end
+
+    include("test_poly_range.jl")
 end
