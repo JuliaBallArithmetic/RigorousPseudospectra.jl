@@ -36,7 +36,8 @@ Conventions of the code:
 | `src/farblock.jl` | §4 `eq:mincert`, `eq:interp`, `prop:ladder`, `eq:sweep`, §4.3 `sec:fpsweep` (`eq:epsP`, `lem:onestep`, `eq:FI`, `prop:fpchecks`, `rem:impl`, `alg:fpsweep`) |
 | `src/frame.jl` | §5.1 `def:Q`, `prop:frame` (frames only), `rem:lanczos`; §5.3 `eq:depthrule` (floating point) |
 | `src/splitting.jl` | §5 `sec:exterior`, `cor:gap`, `sec:almostortho`, `sec:sound`; entry points |
-| `src/deepsplit.jl` | §3.2 the deep tier: the reduced frame `Q·U`, the merged far block through the monotone 2×2 bound, and the derived couplings (none of it in the paper yet) |
+| `src/deepsplit.jl` | §3.2 the deep tier: the reduced frame `Q·U`, the merged far block through the monotone 2×2 bound (`prop:absorb`, `eq:absorb`), and the derived couplings |
+| `src/planner.jl` | the planning phase: floating-point estimates of the leading eigenvalues, `ḡ_m`, `γ1`, `γ2` and `σ11(R)` over a grid of `(R, m, dim Q)`, and the feasible region of the gate and of `thm:assembly`; nothing certified, not in the paper |
 | `src/poly_range.jl` | certified range of a polynomial; not part of the paper, kept unchanged |
 
 ## §2 The two-block bound (`src/twoblock.jl`, `src/splitting.jl`)
@@ -134,6 +135,12 @@ when they conflict the call declines (`ok = false`, `reason`, `kplus_needed`, `s
 `_radius_from_powers(g, β)` is the radius search of `outer_radius` factored out, so that the
 trailing block's powers are computed once and reused.
 
+The ceiling on `k₊` is a stopping rule, not a condition: `split_compression(G, R; kmax, budget)`
+searches without a cap (`kmax` defaults to `k`, `budget` is off), measures the per-`z` cost of one
+`svdbox` of the leading block with `_split_cost_per_z`, and declines with `reason = :cost` when the
+condition asks for more than the rule allows, reporting `kwanted` and `tz`. `:radius` means that no
+`k₊` at all brings `ḡ_J` below the circle.
+
 #### The deep tier (`src/deepsplit.jl`, `deep_split`, `deep_certificate`)
 
 A third tier, added 2026-09-14 (report `20260914_compression_deepsplit.md`). The compression is cut
@@ -166,6 +173,18 @@ upward (`coupling = :gram`, default); `coupling = :direct` uses `svdbox(C)`.
   entries of `G̃` get the extra radius `√(1+α)(ε_A ā‖Q‖_F + √k η_A)`.
 
 The isometry values are `γ_i = γ_{i,Q}/√(1 − α)` and `‖G11‖ ≤ s_Q/(1 − α)` (`isometry_bounds`).
+
+#### The planning phase (`src/planner.jl`, `plan_split`, `SplitPlan`)
+
+Floating point, nothing certified, the operator only through matvecs. One Arnoldi for the leading
+eigenvalues and the candidate radii (`candidate_radii`), one Golub-Kahan-Lanczos shared by the
+grid, then per grid point `2·dim Q` applications of `A` and `A*` for `γ1`, `γ2` (the images of the
+shared pool must NOT be reused: a frame built from the Arnoldi basis is invariant up to the Arnoldi
+residual, which is exactly what `γ` measures) and `mmax·nsamples` applications of `B` for
+`ḡ_m = min_{t ≤ m} v_t` from `estimate_orders`. The grid is scored on the gate
+`γ1γ2 < R(R − ḡ_m)` and on `thm:assembly` at `|z| = R` with a margin; `SplitPlan.feasible` is the
+region, `params` carries `Leig`, `Lsv`, `droptol` so that `two_sided_frame` reproduces the frame
+that was scored. `plan_table` prints it.
 
 ## §4 The far block (`src/farblock.jl`, `src/operator.jl`)
 

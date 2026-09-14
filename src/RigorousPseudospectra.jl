@@ -22,6 +22,8 @@ The source files follow the sections of the paper; the docstrings cite its label
     splitting.jl     §5 the certified splitting and the entry points
     deepsplit.jl     §3.2 the three-tier split: the deep tier leaves the compression and joins the
                      far block (the monotone 2×2 bound and the reduced frame)
+    planner.jl       the planning phase: floating-point estimates over a grid of (R, m, dim Q) and
+                     the feasible region of the gate and of thm:assembly; nothing certified
     poly_range.jl    certified range of a polynomial (not part of the paper)
 """
 module RigorousPseudospectra
@@ -42,6 +44,7 @@ include("farblock.jl")
 include("frame.jl")
 include("splitting.jl")
 include("deepsplit.jl")
+include("planner.jl")
 include("poly_range.jl")
 
 # §2
@@ -58,6 +61,7 @@ export miyajima_rump, MiyajimaRump, EigCluster
 export ModulusSplit, split_compression, sigma_split_lo, sigma_J_lo, split_components
 export split_sigma_blocks_lo, split_block_discs, split_reason
 export DeepSplit, deep_split, deep_certificate, deep_reason, merged_far_bounds
+export SplitPlan, plan_split, plan_table, candidate_radii
 # §3.3, §4
 export LinOp, FrameData, frame_data, frame_alpha, isometry_bounds, compression_ball
 export epsP_up, etaP_up, onestep_up, trace_sweep, SweepSums, estimate_orders
