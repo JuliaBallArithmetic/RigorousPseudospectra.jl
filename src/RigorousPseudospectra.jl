@@ -22,6 +22,10 @@ The source files follow the sections of the paper; the docstrings cite its label
     splitting.jl     §5 the certified splitting and the entry points
     deepsplit.jl     §3.2 the three-tier split: the deep tier leaves the compression and joins the
                      far block (the monotone 2×2 bound and the reduced frame)
+    radius_sweep.jl  how far in the circle can be pushed at a fixed frame, by inverse
+                     iteration on the Schur factor; nothing certified
+    triangular.jl    the triangular route: the two-block floor in the unitary Schur basis,
+                     the adaptive cover and the count by homotopy in the coupling
     planner.jl       the planning phase: floating-point estimates over a grid of (R, m, dim Q) and
                      the feasible region of the gate and of thm:assembly; nothing certified
     poly_range.jl    certified range of a polynomial (not part of the paper)
@@ -44,6 +48,8 @@ include("farblock.jl")
 include("frame.jl")
 include("splitting.jl")
 include("deepsplit.jl")
+include("triangular.jl")
+include("radius_sweep.jl")
 include("planner.jl")
 include("poly_range.jl")
 
@@ -62,6 +68,8 @@ export ModulusSplit, split_compression, sigma_split_lo, sigma_J_lo, split_compon
 export split_sigma_blocks_lo, split_block_discs, split_reason
 export DeepSplit, deep_split, deep_certificate, deep_reason, merged_far_bounds
 export SplitPlan, plan_split, plan_table, candidate_radii
+export TriangularSplit, triangular_split, sigma_tri_lo, count_tri, cover_tri
+export radius_sweep, radius_table, sigma11_estimate, plan_radii
 # §3.3, §4
 export LinOp, FrameData, frame_data, frame_alpha, isometry_bounds, compression_ball
 export epsP_up, etaP_up, onestep_up, trace_sweep, SweepSums, estimate_orders
