@@ -34,7 +34,7 @@ function run_plan_bz(ke::Integer, ξ::Real, neig::Integer; kss = [20, 50, 100, 1
     if pl.best === nothing
         res = merge(res, (; certified = false, best = nothing, t_cert = NaN, closed = false,
             count = -1))
-        serialize(joinpath(OUT, "$(tag).jls"), res)
+        serialize(joinpath(OUT, "$(tag).$(gethostname()).jls"), res)
         return res
     end
     b = pl.best
@@ -60,7 +60,7 @@ function run_plan_bz(ke::Integer, ξ::Real, neig::Integer; kss = [20, 50, 100, 1
         chk.ok, okc ? string(cnt) : "none", t_cert, pl.time.total)
     res = merge(res, (; certified = true, best = b, t_cert, closed = chk.ok && okc,
         count = okc ? cnt : -1, dimQ = sc.k, gbar = sc.gbar, γ1 = sc.γ1, γ2 = sc.γ2, s11, s11s))
-    serialize(joinpath(OUT, "$(tag).jls"), res)
+    serialize(joinpath(OUT, "$(tag).$(gethostname()).jls"), res)
     return res
 end
 

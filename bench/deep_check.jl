@@ -252,8 +252,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
             end
         end
     end
-    serialize(joinpath(OUTDIR, "deep_check.jls"), out)
-    println("\nserialised to ", joinpath(OUTDIR, "deep_check.jls"))
+    serialize(joinpath(OUTDIR, "deep_check.$(gethostname()).jls"), out)
+    println("\nserialised to ", joinpath(OUTDIR, "deep_check.$(gethostname()).jls"))
     println("\nsummary")
     @printf("%-18s %6s %6s %6s %5s %5s %5s %10s %10s %10s %10s %8s %8s %14s\n", "operator",
         "target", "dimQ", "k_EN", "E", "N", "D", "ḡ_D", "ḡ'", "R", "γ'γ'/γγ", "cnt old",

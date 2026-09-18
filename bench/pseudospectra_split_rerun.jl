@@ -192,6 +192,6 @@ if abspath(PROGRAM_FILE) == @__FILE__
             end
         end
     end
-    serialize(joinpath(OUTDIR, "split_rerun.jls"), out)
-    println("\nserialised to ", joinpath(OUTDIR, "split_rerun.jls"))
+    serialize(joinpath(OUTDIR, "split_rerun.$(gethostname()).jls"), out)
+    println("\nserialised to ", joinpath(OUTDIR, "split_rerun.$(gethostname()).jls"))
 end

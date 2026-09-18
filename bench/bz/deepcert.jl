@@ -99,7 +99,7 @@ function run_deep(ke::Integer, ξ::Real, neig::Integer, ksarg::Integer;
         t_z_deep2 = t_z_deep2 / nθ, c_two, c_svd, c_deep,
         discs_deep = ext_deep === nothing ? -1 : count(d -> isfinite(d.radius), ext_deep.discs),
         agree_deep = ext_deep === nothing ? false : ext_deep.ok, nθ, maxdepth)
-    serialize(joinpath(OUT, "$(tag).jls"), res)
+    serialize(joinpath(OUT, "$(tag).$(gethostname()).jls"), res)
     print_deep(res)
     return res
 end

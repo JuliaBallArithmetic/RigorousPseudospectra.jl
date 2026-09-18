@@ -84,8 +84,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
             end
         end
     end
-    serialize(joinpath(OUTDIR, "plan_check.jls"), out)
-    println("\nserialised to ", joinpath(OUTDIR, "plan_check.jls"))
+    serialize(joinpath(OUTDIR, "plan_check.$(gethostname()).jls"), out)
+    println("\nserialised to ", joinpath(OUTDIR, "plan_check.$(gethostname()).jls"))
     println("\nsummary")
     @printf("%-12s %6s %8s %8s %9s %8s %8s %8s %8s\n", "operator", "n", "grid", "feasible",
         "matvecs", "plan s", "cert s", "closed", "count")
