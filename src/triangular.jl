@@ -177,6 +177,65 @@ that of the block diagonal, read off the Schur diagonal.
 count_tri(ts::TriangularSplit) = count(z -> abs(z) > ts.R, diag(ts.T))
 
 """
+    certify_exterior_tri(ts, gbar, γ1, γ2; R = ts.R, σ22lo = nothing, nθ = 64, maxdepth = 6,
+                         nradii = 12, tol = 1e-8) -> NamedTuple
+
+The exterior certificate of Corollary cor:agree with σ11 from the triangular route. `gbar`, `γ1`
+and `γ2` are the frame's own certified quantities, those of the far block and the two couplings,
+and `σ22lo` an optional sharper lower bound on σ22 than `|z| − gbar`.
+
+Three statements, in order. On `|z| = R` the hypothesis of Theorem thm:assembly is certified by
+[`check_circle`](@ref) with the arc-wise Lipschitz refinement, which makes the floor a bound over
+the whole circle and not only at the samples. The count outside is then that of the compression,
+[`count_tri`](@ref), by the homotopy in the coupling. And around each eigenvalue of the Schur
+factor lying outside `R` a disc is certified by the same test, at the first radius on a geometric
+ladder for which it closes, the ladder stopping at half the distance to the nearest neighbour so
+that the discs are disjoint.
+
+Returns `(; ok, R, count, exterior, discs)`, with `ok` true when the circle and every disc closed.
+"""
+function certify_exterior_tri(ts::TriangularSplit, gbar::Real, γ1::Real, γ2::Real;
+        R::Real = ts.R, σ22lo = nothing, nθ::Int = 64, maxdepth::Int = 6, nradii::Int = 12,
+        tol::Real = 1e-8)
+    R = Float64(R)
+    σ11 = z -> sigma_tri_lo(ts, z)
+    chk = check_circle(σ11, gbar, γ1, γ2, 0, R; region = :exterior, nθ, maxdepth, σ22lo)
+    discs = NamedTuple[]
+    (chk.ok && chk.region_ok) || return (; ok = false, R, count = -1, exterior = chk, discs)
+    λ = diag(ts.T)
+    out = [z for z in λ if abs(z) > R]
+    centres = ComplexF64[]
+    for z in out
+        any(c -> abs(c - z) <= tol * max(1.0, abs(z)), centres) || push!(centres, z)
+    end
+    ok = true
+    for c in centres
+        rmax = subd(absd(c), R)
+        for d in centres
+            d == c && continue
+            rmax = min(rmax, absd(c - d) / 2)
+        end
+        rmin = max(tol * max(1.0, abs(c)), 1e-300)
+        found = false
+        if rmin < rmax
+            for r in exp.(range(log(rmin), log(rmax * (1 - 1e-6)); length = nradii))
+                ck = check_circle(σ11, gbar, γ1, γ2, c, r; region = :interior, nθ, maxdepth,
+                    σ22lo)
+                if ck.ok && ck.region_ok
+                    push!(discs, (; center = c, radius = r,
+                        count = count(z -> abs(z - c) < r, λ), check = ck))
+                    found = true
+                    break
+                end
+            end
+        end
+        found || (ok = false; push!(discs, (; center = c, radius = NaN, count = -1,
+            check = nothing)))
+    end
+    return (; ok, R, count = count_tri(ts), exterior = chk, discs)
+end
+
+"""
     cover_tri(ts, R; nθ = 32, η = 0.5, maxpoints = 20000, escalate = nothing)
 
 An adaptive cover of `|z| = R`. At a sample the bound is `sigma_tri_lo` (or the larger of it and

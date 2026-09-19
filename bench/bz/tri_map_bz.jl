@@ -122,9 +122,24 @@ t_cov = @elapsed cv = RP.cover_tri(ts, R; nθ = 64, η = 0.5, maxpoints = 20000)
     cv.ok, cv.floor, cv.ok ? string(cv.count) : "none", cv.npoints, cv.nbisect, t_cov)
 flush(stdout)
 
+# the exterior certificate of cor:agree, with σ11 from the triangular route and the frame's own
+# far block and couplings: the circle, the count outside it, and one disc per eigenvalue
+t_ext = @elapsed ext = RP.certify_exterior_tri(ts, sc.gbar, sc.γ1, sc.γ2; R, σ22lo,
+    nθ = 64, maxdepth = 6)
+@printf("cor:agree: hypothesis %s, region %s, floor %.4e, count %s, %d discs, all closed %s (%.1f s)\n",
+    ext.exterior.ok, ext.exterior.region_ok, ext.exterior.floor,
+    ext.exterior.ok ? string(ext.count) : "none", length(ext.discs), ext.ok, t_ext)
+for d in ext.discs
+    @printf("   disc at %+.10f %+.10fi, radius %.4e, count %d\n", real(d.center),
+        imag(d.center), d.radius, d.count)
+end
+flush(stdout)
+
 # --- the certified grid --------------------------------------------------------------------------
 half = max(1.15, 1.3 * sc.gbar)
-probe = [half * 0.7 * cis(2π * t / 12) for t in 0:11]
+# the probe samples the whole box, not one radius: a point where the hypothesis fails leaves the
+# evaluation early and costs a fraction of one where it holds, so a single ring underestimates
+probe = [ρ * half * cis(2π * t / 8) for ρ in (0.25, 0.6, 0.95, 1.3) for t in 0:7]
 floor_at(probe[1])
 tprobe = @elapsed for z in probe
     floor_at(z)
@@ -190,9 +205,12 @@ res = (; name = TAG, host = HOST, n = k, k = sc.k, ξ = Ξ, l, R, ks = ksuse, m 
     gbar = sc.gbar, abar = sc.abar, α = sc.α, γ1 = sc.γ1, γ2 = sc.γ2,
     cut = ts.c, dimQ = ts.k, tri_γ1 = ts.γ1, tri_γ2 = ts.γ2, tri_gbar = ts.gbar, nR2 = ts.nR2,
     cover_ok = cv.ok, cover_floor = cv.floor, npoints = cv.npoints, nbisect = cv.nbisect,
-    ng, half, xs, ys, F, ev, discs = NamedTuple[], comps = NamedTuple[], percost,
-    count = cv.ok ? cv.count : -1, Fc, Dc, xc, yc, strict,
-    t_cert, t_dense, t_frame, t_split, t_tri, t_cov,
+    ng, half, xs, ys, F, ev, percost,
+    discs = [(; d.center, d.radius, d.count) for d in ext.discs if isfinite(d.radius)],
+    comps = NamedTuple[], ext_ok = ext.ok, hyp_ok = ext.exterior.ok,
+    region_ok = ext.exterior.region_ok, ext_floor = ext.exterior.floor,
+    count = ext.exterior.ok ? ext.count : -1, Fc, Dc, xc, yc, strict,
+    t_cert, t_dense, t_frame, t_split, t_tri, t_cov, t_ext,
     zxs = Float64[], zys = Float64[], Fz = zeros(0, 0), zc = nothing, zhalf = 0.0, t_zoom = 0.0)
 let out = joinpath(MAPDIR, "map_$(TAG).$(HOST).jls")
     Serialization.serialize(out, res)
