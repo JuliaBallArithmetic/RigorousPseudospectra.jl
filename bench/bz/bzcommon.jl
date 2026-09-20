@@ -44,11 +44,20 @@ Midpoint of RIM's interval Ulam matrix for the BZ map on a partition of `k` cell
 """
 function build_L(k::Integer)
     cache = joinpath(OUT, "L_$(round(Int, log2(k))).jls")
+    # The cache lives in the annex, so on a machine whose annex has not fetched the content the
+    # path holds a pointer file and not a matrix; assemble in place rather than fail.
     if ispowerof2(k) && isfile(cache)
         t0 = time()
-        L = Serialization.deserialize(cache)
-        return L, (; k, t_assemble = time() - t0, nnz = nnz(L), bytes = 0,
-            maxrad = NaN, integral_preserving = true, cached = true)
+        L = try
+            Serialization.deserialize(cache)
+        catch err
+            @warn "the cached operator could not be read; assembling instead" cache err
+            nothing
+        end
+        if L isa AbstractMatrix
+            return L, (; k, t_assemble = time() - t0, nnz = nnz(L), bytes = 0,
+                maxrad = NaN, integral_preserving = true, cached = true)
+        end
     end
     t0 = time(); b0 = Base.gc_bytes()
     D = RIM.BZ()
