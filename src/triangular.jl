@@ -68,6 +68,36 @@ function _tri_sort_schur!(T::Matrix{ComplexF64}, V::Matrix{ComplexF64})
     return T, V
 end
 
+"""
+`‖T[1:c, c+1:k]‖_F` at every cut `c` in `cuts`, in one pass. Moving the cut from `c` to `c+1`
+removes the entries of column `c+1` above row `c+1` and adds the entries of row `c+1` to the right
+of it, so the whole sweep costs `O(k²)` rather than `O(k²)` a cut.
+"""
+function _tri_coupling_fro(T::AbstractMatrix, cuts::AbstractVector{<:Integer})
+    k = size(T, 1)
+    isempty(cuts) && return Float64[]
+    c0 = first(cuts)
+    s = 0.0
+    for j in (c0 + 1):k, i in 1:c0
+        s += abs2(T[i, j])
+    end
+    out = zeros(Float64, length(cuts))
+    c = c0
+    for (idx, cc) in enumerate(cuts)
+        while c < cc
+            for i in 1:c
+                s -= abs2(T[i, c + 1])
+            end
+            for j in (c + 2):k
+                s += abs2(T[c + 1, j])
+            end
+            c += 1
+        end
+        out[idx] = sqrt(max(s, 0.0))
+    end
+    return out
+end
+
 "Floating-point `min_{j ≤ mmax} ‖B^j‖^{1/j}`, stopping as soon as it falls below `R`."
 function _tri_fp_power(B::AbstractMatrix, R::Real, mmax::Integer)
     isempty(B) && return 0.0
@@ -122,14 +152,20 @@ function triangular_split(G, M, R::Real; α::Real = 0.0, factor::Real = 2.0,
     adm = [c for c in kE:(k - 1) if a[c] > a[c + 1] * (1 + 1e-10)]
     isempty(adm) && return nothing
 
-    # stage one, every admissible cut: the coupling above the diagonal and the modulus of the
-    # largest eigenvalue left behind, which is what σ22 can at best be. Both are free here.
-    prox = [(; c, n12 = norm(view(T, 1:c, (c + 1):k)), s22p = R - a[c + 1]) for c in adm]
-    rank = sort(prox; by = p -> -(p.s22p > 0 ? p.s22p / (p.s22p + p.n12) : -Inf))
+    # stage one, every admissible cut. The Frobenius norm of the coupling is used here and only
+    # here, because it is the one quantity that updates in O(k) as the cut moves by one: the block
+    # loses the part of column c+1 above the diagonal and gains the part of row c+1 to the right of
+    # it. It overestimates the spectral norm by at most the square root of the rank, so the ranking
+    # is pessimistic, which is the safe direction for a shortlist.
+    fro = _tri_coupling_fro(T, adm)
+    prox = [(; c = adm[i], n12f = fro[i], s22p = R - a[adm[i] + 1]) for i in eachindex(adm)]
+    rank = sort(prox; by = p -> -(p.s22p > 0 ? p.s22p / (p.s22p + p.n12f) : -Inf))
     short = unique(vcat(first(rank, min(nshort, length(rank))), [prox[1]]))
 
-    # stage two, the shortlist: the power bound on the trailing block and σ11 on the circle by
-    # inverse iteration on the leading triangular block, O(c²) a step
+    # stage two, the shortlist only: the spectral norm of the coupling by an economy SVD, the power
+    # bound on the trailing block, and σ11 on the circle by inverse iteration on the leading
+    # triangular block. The block is being formed here anyway, and the Frobenius overestimate would
+    # otherwise choose the cut.
     rows = NamedTuple[]
     for p in short
         c = p.c
@@ -137,8 +173,9 @@ function triangular_split(G, M, R::Real; α::Real = 0.0, factor::Real = 2.0,
         g < R || continue
         s11 = minimum(sigma11_estimate(view(T, 1:c, 1:c), R * cis(2π * t / nθ)) for t in 0:(nθ - 1))
         s11 > 0 || continue
+        n12 = opnorm(Matrix(view(T, 1:c, (c + 1):k)))
         s22 = R - g
-        push!(rows, (; c, score = s11 * s22 / (s11 + s22 + p.n12), n12 = p.n12, g, s11))
+        push!(rows, (; c, score = s11 * s22 / (s11 + s22 + n12), n12, n12f = p.n12f, g, s11))
     end
     isempty(rows) && return nothing
     bestscore = maximum(r.score for r in rows)
@@ -170,7 +207,7 @@ function triangular_split(G, M, R::Real; α::Real = 0.0, factor::Real = 2.0,
     end
     gbar = addu(gbar, corr)
     return TriangularSplit(k, c, R, V, T, That, P11, Pdeep, γ1, γ2, gbar, gj, corr, nR2,
-        Float64(α), (; scan = [(; r.c, r.score, r.n12, r.g) for r in rows], factor = Float64(factor),
+        Float64(α), (; scan = [(; r.c, r.score, r.n12, r.n12f, r.g) for r in rows], factor = Float64(factor),
             bestscore))
 end
 
