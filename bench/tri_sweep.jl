@@ -28,7 +28,7 @@ const NDENSE_EIG = 6000
 const NTHETA = 64
 const MAXDEPTH = 6
 
-const NCUTS = (10, 30, 80)
+const NSHORT = (8, 24, 64)
 const MMAX = (8, 16)
 const FACTOR = (1.0, 2.0)
 
@@ -64,25 +64,25 @@ function run_target(o, λ, target::Integer, rows)
         o.name, o.n, target, c, R, finfo.dimQ, sc.gbar, sc.γ1, sc.γ2, t_frame + t_split)
     flush(stdout)
     σ22lo(z) = max(RP.farshort_lo(z, sc.gbar), RP.farpower_lo(z, sc.gbars_power))
-    for ncuts in NCUTS, mmax in MMAX, factor in FACTOR
-        t = @elapsed ts = RP.triangular_split(sc.G, sc.M, R; α = sc.α, factor, ncuts, mmax)
+    for nshort in NSHORT, mmax in MMAX, factor in FACTOR
+        t = @elapsed ts = RP.triangular_split(sc.G, sc.M, R; α = sc.α, factor, nshort, mmax)
         if ts === nothing
-            @printf("    ncuts %3d mmax %2d factor %.1f : declined (%.1f s)\n", ncuts, mmax,
+            @printf("    nshort %3d mmax %2d factor %.1f : declined (%.1f s)\n", nshort, mmax,
                 factor, t)
             push!(rows, (; op = o.name, o.n, target, R, dimQ = finfo.dimQ, sc.gbar, sc.γ1,
-                sc.γ2, ncuts, mmax, factor, declined = true, cut = -1, tri_γ1 = NaN,
+                sc.γ2, nshort, mmax, factor, declined = true, cut = -1, tri_γ1 = NaN,
                 tri_gbar = NaN, hyp_ok = false, floor = 0.0, count = -1, ndiscs = 0,
                 dense_count, t, host = HOST))
             continue
         end
         te = @elapsed ext = RP.certify_exterior_tri(ts, sc.gbar, sc.γ1, sc.γ2; R, σ22lo,
             nθ = NTHETA, maxdepth = MAXDEPTH)
-        @printf("    ncuts %3d mmax %2d factor %.1f : cut %5d of %d, γ1 %.3e, ḡ₂₂ %.3e, hyp %s, count %s (dense %d), %d discs (%.1f + %.1f s)\n",
-            ncuts, mmax, factor, ts.c, ts.k, ts.γ1, ts.gbar, ext.exterior.ok,
+        @printf("    nshort %3d mmax %2d factor %.1f : cut %5d of %d, γ1 %.3e, ḡ₂₂ %.3e, hyp %s, count %s (dense %d), %d discs (%.1f + %.1f s)\n",
+            nshort, mmax, factor, ts.c, ts.k, ts.γ1, ts.gbar, ext.exterior.ok,
             ext.exterior.ok ? string(ext.count) : "-", dense_count, length(ext.discs), t, te)
         flush(stdout)
         push!(rows, (; op = o.name, o.n, target, R, dimQ = finfo.dimQ, sc.gbar, sc.γ1, sc.γ2,
-            ncuts, mmax, factor, declined = false, cut = ts.c, tri_γ1 = ts.γ1,
+            nshort, mmax, factor, declined = false, cut = ts.c, tri_γ1 = ts.γ1,
             tri_gbar = ts.gbar, hyp_ok = ext.exterior.ok, floor = ext.exterior.floor,
             count = ext.exterior.ok ? ext.count : -1,
             ndiscs = count(d -> isfinite(d.radius), ext.discs), dense_count, t = t + te,
@@ -128,8 +128,8 @@ function main(names)
     for p in closed
         best = [r for r in rows if (r.op, r.target) == p && r.hyp_ok]
         b = sort(best; by = r -> -r.floor)[1]
-        @printf("   %-18s target %2d : best floor %.4e at ncuts %d, mmax %d, factor %.1f, cut %d\n",
-            p[1], p[2], b.floor, b.ncuts, b.mmax, b.factor, b.cut)
+        @printf("   %-18s target %2d : best floor %.4e at nshort %d, mmax %d, factor %.1f, cut %d\n",
+            p[1], p[2], b.floor, b.nshort, b.mmax, b.factor, b.cut)
     end
     println("wrote ", joinpath(OUT, "tri_sweep.$(HOST).csv"))
 end

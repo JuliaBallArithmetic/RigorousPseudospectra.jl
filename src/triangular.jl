@@ -53,6 +53,21 @@ end
 
 _tri_blockball(B, r1, r2) = BallMatrix(Matrix(mid(B))[r1, r2], Matrix(rad(B))[r1, r2])
 
+"""
+Sort a complex Schur factor by decreasing modulus of the diagonal, in place, by moving each
+largest remaining entry into position with one LAPACK reordering. At most `k − 1` moves, and every
+cut is then a prefix, so the scan never reorders again.
+"""
+function _tri_sort_schur!(T::Matrix{ComplexF64}, V::Matrix{ComplexF64})
+    k = size(T, 1)
+    for i in 1:(k - 1)
+        j = argmax(m -> abs(T[m, m]), i:k)
+        j == i && continue
+        LinearAlgebra.LAPACK.trexc!('V', j, i, T, V)
+    end
+    return T, V
+end
+
 "Floating-point `min_{j ≤ mmax} ‖B^j‖^{1/j}`, stopping as soon as it falls below `R`."
 function _tri_fp_power(B::AbstractMatrix, R::Real, mmax::Integer)
     isempty(B) && return 0.0
@@ -68,16 +83,25 @@ function _tri_fp_power(B::AbstractMatrix, R::Real, mmax::Integer)
 end
 
 """
-    triangular_split(G, M, R; α = 0.0, factor = 2.0, ncuts = 10, mmax = 8, nθ = 8) -> TriangularSplit
+    triangular_split(G, M, R; α = 0.0, factor = 2.0, nshort = 24, mmax = 8, nθ = 8)
+        -> TriangularSplit
 
 The scan, the cut and the one ball evaluation. `G` and `M` are the ball compression and its Gram,
-`R` the radius, `α ≥ ‖I − Q*Q‖`. The scan evaluates, at each admissible cut, the coupling
-`‖T₁₂‖`, the deep-tier bound and a floating-point `σ₁₁` at `nθ` points of the circle, and keeps the
-shallowest cut whose predicted floor is within `factor` of the best; an admissible cut does not
-split a pair of equal moduli. Returns `nothing` when no cut brings the deep tier below `R`.
+`R` the radius, `α ≥ ‖I − Q*Q‖`.
+
+The Schur factor is sorted by decreasing modulus once, so that every cut is a prefix of the same
+`T` and no candidate costs a reordering. The scan then runs in two stages, both in floating point
+and neither certified. Every admissible cut, one that does not separate a pair of equal moduli, is
+ranked by what is free to compute, the coupling `‖T₁₂‖_F` above the diagonal and the modulus of the
+largest eigenvalue left behind, which caps `σ₂₂`. The best `nshort` of them, and the shallowest, are
+then measured properly: the power bound on the trailing block and `σ₁₁` on the circle at `nθ` angles
+by inverse iteration on the leading triangular block. The cut kept is the shallowest whose predicted
+floor is within `factor` of the best.
+
+Returns `nothing` when no cut brings the trailing block below `R`.
 """
 function triangular_split(G, M, R::Real; α::Real = 0.0, factor::Real = 2.0,
-        ncuts::Integer = 10, mmax::Integer = 8, nθ::Integer = 8)
+        nshort::Integer = 24, mmax::Integer = 8, nθ::Integer = 8)
     Gb = _promote_ball(_ball(G))
     Mb = _promote_ball(_ball(M))
     Gm = ComplexF64.(Matrix(mid(Gb)))
@@ -89,34 +113,38 @@ function triangular_split(G, M, R::Real; α::Real = 0.0, factor::Real = 2.0,
     S = schur(Gc)
     T0 = Matrix(S.T)
     V0 = Matrix(S.Z)
-    a = abs.(diag(T0))
-    srt = sort(a; rev = true)
+    # sort the Schur factor by decreasing modulus once, so that every cut is a prefix of the same
+    # T and the scan costs no further reordering
+    T, V = _tri_sort_schur!(T0, V0)
+    a = abs.(diag(T))
     kE = count(>(R), a)
     kE == 0 && return nothing
-    grid = unique(clamp.(round.(Int, exp.(range(log(max(kE, 1)), log(max(k - 1, 1));
-            length = ncuts))), 1, max(k - 1, 1)))
+    adm = [c for c in kE:(k - 1) if a[c] > a[c + 1] * (1 + 1e-10)]
+    isempty(adm) && return nothing
+
+    # stage one, every admissible cut: the coupling above the diagonal and the modulus of the
+    # largest eigenvalue left behind, which is what σ22 can at best be. Both are free here.
+    prox = [(; c, n12 = norm(view(T, 1:c, (c + 1):k)), s22p = R - a[c + 1]) for c in adm]
+    rank = sort(prox; by = p -> -(p.s22p > 0 ? p.s22p / (p.s22p + p.n12) : -Inf))
+    short = unique(vcat(first(rank, min(nshort, length(rank))), [prox[1]]))
+
+    # stage two, the shortlist: the power bound on the trailing block and σ11 on the circle by
+    # inverse iteration on the leading triangular block, O(c²) a step
     rows = NamedTuple[]
-    for c in grid
-        c >= kE || continue
-        c < k && srt[c] > srt[c + 1] * (1 + 1e-10) || continue
-        sel = a .> (srt[c] - 1e-14)
-        count(sel) == c || continue
-        F = Schur(copy(T0), copy(V0), diag(T0))
-        ordschur!(F, BitVector(sel))
-        T = Matrix(F.T)
-        V = Matrix(F.Z)
-        g = _tri_fp_power(T[(c + 1):k, (c + 1):k], R, mmax)
+    for p in short
+        c = p.c
+        g = _tri_fp_power(Matrix(view(T, (c + 1):k, (c + 1):k)), R, mmax)
         g < R || continue
-        n12 = opnorm(T[1:c, (c + 1):k])
-        s11 = minimum(minimum(svdvals(T[1:c, 1:c] - R * cis(2π * t / nθ) * I)) for t in 0:(nθ - 1))
+        s11 = minimum(sigma11_estimate(view(T, 1:c, 1:c), R * cis(2π * t / nθ)) for t in 0:(nθ - 1))
+        s11 > 0 || continue
         s22 = R - g
-        push!(rows, (; c, score = s11 * s22 / (s11 + s22 + n12), n12, g, s11, T, V))
+        push!(rows, (; c, score = s11 * s22 / (s11 + s22 + p.n12), n12 = p.n12, g, s11))
     end
     isempty(rows) && return nothing
     bestscore = maximum(r.score for r in rows)
     elig = [r for r in rows if r.score >= bestscore / Float64(factor)]
     best = elig[argmin([r.c for r in elig])]
-    c, T, V = best.c, best.T, best.V
+    c = best.c
     cur, rest = 1:c, (c + 1):k
 
     # one ball evaluation: T̂ = V*M⁻¹G̃V, with the residual of the basis carried as a correction
