@@ -59,16 +59,25 @@ widest gaps rather than the first few puts the candidates where `R` has room, wh
 conditions are sensitive to.
 """
 function candidate_radii(λ::AbstractVector, nmax::Integer = 8; tol::Real = 1e-9,
-        jmax::Integer = 40, ntop::Integer = 4)
+        jmax::Integer = 40, ntop::Integer = 4, rmin::Real = 0.0)
     a = sort(abs.(λ); rev = true)
     cand = Tuple{Float64, Float64, Int}[]
     for j in 1:min(length(a) - 1, Int(jmax))
         a[j] > a[j + 1] * (1 + tol) || continue
-        push!(cand, (a[j] / max(a[j + 1], floatmin(Float64)), sqrt(a[j] * a[j + 1]), j))
+        r = sqrt(a[j] * a[j + 1])
+        # A gap below the floor the singular values allow is in the shadow of the far block: by
+        # Proposition prop:frame every frame has ḡ ≥ σ_{2k+1}(A), so no radius there can ever
+        # satisfy ḡ < R and a grid point spent on it is wasted. The spectrum is free to thin in
+        # there and it does not help.
+        r > Float64(rmin) || continue
+        push!(cand, (a[j] / max(a[j + 1], floatmin(Float64)), r, j))
     end
     isempty(cand) && return Float64[]
-    # the gaps at the very top of the spectrum, where a count of a few eigenvalues sits, and then
-    # the widest relative gaps wherever they are
+    # above the floor there are usually few gaps, so every one of them is tried; `nmax` caps the
+    # budget when the spectrum is thin everywhere, keeping the widest relative gaps and the ones
+    # at the very top, where a count of a few eigenvalues sits
+    length(cand) <= Int(nmax) + Int(ntop) &&
+        return sort(unique([t[2] for t in cand]); rev = true)
     top = [t[2] for t in cand[1:min(Int(ntop), length(cand))]]
     wide = [t[2] for t in sort(cand; by = t -> -t[1])[1:min(Int(nmax), length(cand))]]
     return sort(unique(vcat(top, wide)); rev = true)
@@ -107,8 +116,6 @@ function plan_split(op::LinOp, Amul, Aadj; Rs = nothing, mmax::Integer = 12,
     Lh = size(H, 2)
     F = eigen(H[1:Lh, 1:Lh])
     λ = F.values[sortperm(abs.(F.values); rev = true)]
-    radii = Rs === nothing ? candidate_radii(λ, nR) : Float64.(collect(Rs))
-    isempty(radii) && (radii = [sqrt(abs(λ[1]) * abs(λ[end]))])
     t_arn = time() - t0
 
     # --- the singular directions, one Golub-Kahan-Lanczos, shared by every grid point
@@ -118,6 +125,14 @@ function plan_split(op::LinOp, Amul, Aadj; Rs = nothing, mmax::Integer = 12,
     Vr, Ul, σ = gkl(Amul, Aadj, n, L; T = TT)
     nmv[] += 2L
     ksmax = min(maximum(kmax), size(Vr, 2))
+    # the floor: prop:frame gives ḡ ≥ σ_{2k+1}(A) for a frame of k columns, so the smallest frame
+    # on the grid fixes how deep any radius can go. The singular values are the ones the
+    # Golub-Kahan-Lanczos has just returned, so this costs nothing.
+    jfloor = min(2 * minimum(kmax) + 1, length(σ))
+    rfloor = length(σ) == 0 ? 0.0 : Float64(σ[jfloor])
+    radii = Rs === nothing ? candidate_radii(λ, nR; rmin = rfloor) :
+            Float64.(collect(Rs))
+    isempty(radii) && (radii = [sqrt(abs(λ[1]) * abs(λ[end]))])
     t_gkl = time() - t1
 
     # --- the column pool and its images, computed once

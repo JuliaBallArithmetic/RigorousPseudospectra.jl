@@ -61,7 +61,7 @@ function pick_radius(o, op)
     kss = filter(k -> 2k + 60 < o.n, [20, 50, 100, 150, 300, 600, 900])
     isempty(kss) && return nothing
     t = @elapsed (pl = RP.plan_split(op, o.matvec, o.adjoint; kss, mmax = 12, nR = 6,
-        amargin = 1.5, Leig = 200, T = Float64))
+        amargin = 1.5, Leig = 200))
     if pl.best === nothing
         @printf("\n--- %s  n = %d  planner: %d grid points, none feasible (%d matvecs, %.1f s)\n",
             o.name, o.n, length(pl.rows), pl.nmatvec, t)
@@ -83,7 +83,7 @@ function run_target(o, λ, rows)
     t_frame = @elapsed ((Q, finfo) = pr.ks === nothing ?
         RP.choose_frame(op, o.matvec, o.adjoint, R; kmax = o.kmax) :
         RP.two_sided_frame(o.matvec, o.adjoint, o.n, R; ks = pr.ks, Leig = 200,
-            Lsv = min(o.n, 2pr.ks + 60), T = Float64))
+            Lsv = min(o.n, 2pr.ks + 60), T = op.T))
     t_split = @elapsed (sc = RP.certify_split(op, Q; target = R, compression = :none))
     @printf("    frame: ks = %d, dim Q = %d, α = %.3e, ḡ = %.6g, ā = %.6g, γ1 = %.3e, γ2 = %.3e (%.1f s + %.1f s)\n",
         finfo.ks, finfo.dimQ, sc.α, sc.gbar, sc.abar, sc.γ1, sc.γ2, t_frame, t_split)
