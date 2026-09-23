@@ -105,7 +105,7 @@ whole grid and the feasible region; see [`SplitPlan`](@ref).
 function plan_split(op::LinOp, Amul, Aadj; Rs = nothing, mmax::Integer = 12,
         kss = nothing, Leig::Integer = 120, Lsv = nothing, nθ::Integer = 24,
         amargin::Real = 1.5, nsamples::Integer = 4, nR::Integer = 6, droptol::Real = 1e-8,
-        T = nothing)
+        η::Real = 0.5, objective::Symbol = :cost, T = nothing)
     t0 = time()
     n = op.n
     TT = T === nothing ? op.T : T
@@ -191,20 +191,38 @@ function plan_split(op::LinOp, Amul, Aadj; Rs = nothing, mmax::Integer = 12,
             s22 = _sigma22_est(R, g, m)
             gate = γ1 * γ2 < R * s22
             marg = γ1 * γ2 > 0 ? s11 * s22 / (γ1 * γ2) : Inf
-            push!(rows, (; R, ks, m, dimQ = k, nout = count(θ -> abs(θ) > R, λ),
+            # What the certificate will cost, predicted from what is already here. The floor of
+            # thm:assembly sets the cover, since an arc is accepted when the bound exceeds its
+            # length, so the number of arcs is about 2πR/(η·floor); each point costs one verified
+            # SVD of the leading block, which grows like k_EN³ and is bounded here by dim Q³, the
+            # cut not being known until the compression is in Schur form. The value is the number
+            # of eigenvalues put outside, so the currency is work per eigenvalue.
+            fl = s11 * s22 > γ1 * γ2 ?
+                 (s11 * s22 - γ1 * γ2) / (s11 + s22 + γ1 + γ2) : 0.0
+            nz = count(θ -> abs(θ) > R, λ)
+            arcs = fl > 0 ? 2π * R / (Float64(η) * fl) : Inf
+            work = arcs * float(k)^3
+            push!(rows, (; R, ks, m, dimQ = k, nout = nz,
                 gbar = g[1], gbar_m = _gbar_est(g, m),
-                s22, γ1, γ2, s11, gate, margin = marg,
+                s22, γ1, γ2, s11, gate, margin = marg, floor = fl, arcs, work,
+                cost = nz > 0 ? work / nz : Inf,
                 assembly = gate && marg > Float64(amargin)))
         end
     end
     t_grid = time() - t3
 
     feas = [r for r in rows if r.assembly]
-    # What the method is for is certifying as many eigenvalues as possible with as small a frame as
-    # possible; once a point is feasible, further margin buys nothing. So the order is the count
-    # outside first, then the frame size, and the margin only breaks what is left.
-    best = isempty(feas) ? nothing :
-           sort(feas; by = r -> (-r.nout, r.dimQ, -r.margin))[1]
+    # `objective = :cost` takes the point of least predicted work per eigenvalue certified, which
+    # prices the cover as well as the frame; `:count` takes the most eigenvalues outside, then the
+    # smallest frame, which is what a user who wants depth at any price would choose. Neither is
+    # certified: both read estimates.
+    best = if isempty(feas)
+        nothing
+    elseif objective === :count
+        sort(feas; by = r -> (-r.nout, r.dimQ, -r.margin))[1]
+    else
+        sort(feas; by = r -> (r.cost, r.dimQ))[1]
+    end
 
     # for each (R, m) with nothing feasible, where the grid says dim Q would have to be
     pred = NamedTuple[]
@@ -229,7 +247,8 @@ function plan_split(op::LinOp, Amul, Aadj; Rs = nothing, mmax::Integer = 12,
         sort!(pred; by = r -> r.dimQ_needed)
     end
     return SplitPlan(best !== nothing, rows, feas, best, pred, ComplexF64.(λ), radii,
-        (; Leig = min(Leig, n - 1), Lsv = L, droptol, nθ, amargin, nsamples, mmax), nmv[],
+        (; Leig = min(Leig, n - 1), Lsv = L, droptol, nθ, amargin, nsamples, mmax, η,
+            objective), nmv[],
         (; arnoldi = t_arn, gkl = t_gkl, pool = t_pool, grid = t_grid, total = time() - t0))
 end
 
@@ -283,7 +302,8 @@ function plan_table(p::SplitPlan; io = stdout, all::Bool = false)
             b = sort(sub; by = r -> (r.dimQ, -r.margin))[1]
             println(io, "   ", lpad(nz, 4), " outside   dim Q ", lpad(b.dimQ, 6),
                 "   R = ", round(b.R; sigdigits = 6), "   m = ", b.m,
-                "   margin ", round(b.margin; sigdigits = 4))
+                "   arcs ", lpad(isfinite(b.arcs) ? string(round(Int, b.arcs)) : "-", 8),
+                "   work/eig ", isfinite(b.cost) ? round(b.cost; sigdigits = 3) : Inf)
         end
     end
     if p.best !== nothing
