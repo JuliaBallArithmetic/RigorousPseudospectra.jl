@@ -1,8 +1,8 @@
 # Exterior pseudospectrum maps on the real operators, for the numerics section.
 #
-# For one operator and the R of the target of ten eigenvalues outside the circle: the frame of
-# def:Q by `choose_frame`, one `certify_split` (the same two calls the 2026-09-12 run made, so the
-# certified ḡ, γ1, γ2 reproduce the frame.csv row and are checked against it), and then on a grid
+# For one operator, at the radius the planner chooses: the frame of
+# def:Q at the radius and frame size `plan_split` chooses, one `certify_split` with no peeling,
+# one `triangular_split` of the compression, and then on a grid
 # over a box containing |z| = R the certified lower bound on σ_min(A − zI) of thm:assembly with
 # eq:farshort, grey where there is none. Over it: the circle |z| = R, the circle |z| = ḡ, the dense
 # σ_min = ε contours for a few ε, the eigenvalues, and the isolation discs of cor:agree where the
@@ -43,7 +43,6 @@ end
 num(r, k) = parse(Float64, r[k])
 pick(rows, name) = only(filter(r -> r["op"] == name && r["target"] == "10", rows))
 
-const FRAMES = readcsv(joinpath(OUT, "frame.csv"))
 
 # The configurations. `ng` is the number of grid points per side; `levels` the ε of the dense
 # σ_min = ε contours, as fractions of ‖A‖.
@@ -60,28 +59,22 @@ const CONFIGS = Dict(
         ngz = 0))
 
 function build(name)
-    fr = pick(FRAMES, name)
-    R = num(fr, "R")
     o = ps_operator(name)
     op = LinOp(o.A)
-    t_frame = @elapsed ((Q, finfo) = choose_frame(op, o.matvec, o.adjoint, R; kmax = o.kmax))
+    # the radius and the frame are the planner's, not a radius read off a dense eigendecomposition
+    kss = filter(k -> 2k + 60 < o.n, [20, 50, 100, 150, 300, 600, 900])
+    t_plan = @elapsed (pl = plan_split(op, o.matvec, o.adjoint; kss, mmax = 12, nR = 6,
+        amargin = 1.5, Leig = 200))
+    pl.best === nothing && error("$name: the planner found no feasible point")
+    b = pl.best
+    R = b.R
+    @printf("%s: planner %d grid points, %d feasible, %d matvecs, %.1f s -> R = %.6g, ks = %d, dim Q = %d, %d outside\n",
+        name, length(pl.rows), length(pl.feasible), pl.nmatvec, t_plan, R, b.ks, b.dimQ, b.nout)
+    plan_table(pl)
+    t_frame = @elapsed ((Q, finfo) = two_sided_frame(o.matvec, o.adjoint, o.n, R; ks = b.ks,
+        Leig = 200, Lsv = min(o.n, 2b.ks + 60), T = op.T))
     t_split = @elapsed (sc = certify_split(op, Q; target = R, compression = :none))
-    # The certificate must be the one the 2026-09-12 run produced. ḡ and ā come from a sweep with
-    # a stochastic trace estimate, so they and the γ they feed are not bit-reproducible; the CSV
-    # also carries only ten significant digits. A relative agreement of 1e-5 is what is checked,
-    # and the deviation actually seen is reported.
-    dev = Dict{String, Float64}()
-    for (f, v) in (("dimQ", Float64(sc.k)), ("gbar", sc.gbar), ("gamma1", sc.γ1),
-            ("gamma2", sc.γ2), ("abar", sc.abar))
-        c = num(fr, f)
-        dev[f] = abs(v - c) / max(abs(c), eps())
-        dev[f] < 1e-5 ||
-            @warn "certificate differs from frame.csv" name f csv=c here=v rel=dev[f]
-    end
-    @printf("%s: largest relative deviation from frame.csv %.3e (%s)\n", name,
-        maximum(values(dev)), argmax(dev))
     # the compression is treated by the triangular route of sec:triangular; the frame and the far
-    # block above are unchanged, which is why the frame.csv check still applies
     t_tri = @elapsed ts = triangular_split(sc.G, sc.M, R; α = sc.α, factor = 2.0)
     ts === nothing && error("triangular_split declined on $name")
     @printf("   triangular cut %d of %d, γ1 = %.3e, γ2 = %.3e, divisor %.6f (%.1f s)\n",
@@ -96,8 +89,8 @@ function build(name)
         f2, _ = blockdom_floor(s11, s22, sc.γ1, sc.γ2)
         return max(f1, f2)
     end
-    return (; o, op, sc, ts, σ22lo, floor_at, R, t_frame, t_split, t_tri,
-        absl1 = num(fr, "absl1"))
+    return (; o, op, sc, ts, σ22lo, floor_at, R, t_frame, t_split, t_tri, plan = pl.best,
+        absl1 = maximum(abs, pl.lambda))
 end
 
 "The certified floor and the dense σ_min on the grid `xs × ys`."
