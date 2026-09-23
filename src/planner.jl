@@ -23,10 +23,12 @@
 """
     SplitPlan
 
-Output of [`plan_split`](@ref). Two ways to ask it a question: give `Rs` to fix the radius outside
-which everything is to be bounded, and the grid ranges over frames and orders at that radius alone;
-or give `nmin` to fix how many eigenvalues are to be certified, and the radius is chosen. With
-neither, the cheapest feasible point is taken. `rows` is the grid, one entry per `(R, ks, m)` with the estimated
+Output of [`plan_split`](@ref). Three ways to ask it a question. `Rwindow = (r1, r2)` asks for a
+circle somewhere in that annulus, which is the safe form of fixing a radius: the candidates are
+the gaps that lie inside it, so a circle grazing an eigenvalue, where the floor collapses and the
+cover runs away, is not forced on the certificate. `Rs` fixes the radius exactly, and takes that
+risk. `nmin` fixes instead how many eigenvalues are to be certified and lets the radius follow.
+With none of them, the cheapest feasible point is taken. `rows` is the grid, one entry per `(R, ks, m)` with the estimated
 `gbar[j]`, `σ22`, `γ1`, `γ2`, `σ11`, and the two conditions; `feasible` the sub-list on which both
 hold; `best` the feasible row with the largest margin (fewest frame columns among ties), or
 `nothing`. `predicted` records, for each `(R, m)` on which no frame on the grid is feasible, the
@@ -108,7 +110,7 @@ whole grid and the feasible region; see [`SplitPlan`](@ref).
 function plan_split(op::LinOp, Amul, Aadj; Rs = nothing, mmax::Integer = 12,
         kss = nothing, Leig::Integer = 120, Lsv = nothing, nθ::Integer = 24,
         amargin::Real = 1.5, nsamples::Integer = 4, nR::Integer = 6, droptol::Real = 1e-8,
-        η::Real = 0.5, objective::Symbol = :cost, nmin::Integer = 1,
+        η::Real = 0.5, objective::Symbol = :cost, nmin::Integer = 1, Rwindow = nothing,
         budget::Integer = 40_000, T = nothing)
     t0 = time()
     n = op.n
@@ -140,7 +142,8 @@ function plan_split(op::LinOp, Amul, Aadj; Rs = nothing, mmax::Integer = 12,
     # how deep the singular values have to be seen: down to the radius the caller asked for, or,
     # when the caller asked for none, down to the smallest gap between Ritz moduli, since a radius
     # can only be placed in a gap
-    target = Rs !== nothing ? minimum(Float64.(collect(Rs))) :
+    target = Rwindow !== nothing ? Float64(minimum(Rwindow)) :
+             Rs !== nothing ? minimum(Float64.(collect(Rs))) :
              isempty(gaps) ? 0.0 : minimum(gaps)
     local Vr, Ul, σ, L
     if kss !== nothing || Lsv !== nothing
@@ -181,8 +184,22 @@ function plan_split(op::LinOp, Amul, Aadj; Rs = nothing, mmax::Integer = 12,
         j === nothing ? typemax(Int) : max(cld(j - 1, 2), 1)
     end
     rfloor = isempty(sv) ? 0.0 : sv[min(2 * maximum(kmax) + 1, length(sv))]
-    radii = Rs === nothing ? candidate_radii(λ, nR; rmin = rfloor) :
-            Float64.(collect(Rs))
+    radii = if Rwindow !== nothing
+        # A single radius is a hostage to where the spectrum happens to sit: a circle that grazes
+        # an eigenvalue has a floor near zero and a cover that runs away, while one a little to
+        # either side is cheap. Asked for a window, the planner places its candidates at the gaps
+        # inside it, so that the circle is chosen rather than imposed, and falls back to a few
+        # points of the interval when no gap lies within.
+        r1, r2 = extrema(Float64.(collect(Rwindow)))
+        inside = [r for r in gaps if r1 <= r <= r2]
+        isempty(inside) ?
+            collect(exp.(range(log(r1), log(r2); length = 5))) :
+            sort(unique(inside); rev = true)
+    elseif Rs === nothing
+        candidate_radii(λ, nR; rmin = rfloor)
+    else
+        Float64.(collect(Rs))
+    end
     isempty(radii) && (radii = [sqrt(abs(λ[1]) * abs(λ[end]))])
     t_gkl = time() - t1
 
@@ -295,7 +312,7 @@ function plan_split(op::LinOp, Amul, Aadj; Rs = nothing, mmax::Integer = 12,
     end
     return SplitPlan(best !== nothing, rows, feas, best, pred, ComplexF64.(λ), radii,
         (; Leig = min(Leig, n - 1), Lsv = L, droptol, nθ, amargin, nsamples, mmax, η,
-            objective, nmin, budget, Lgrew = grew), nmv[],
+            objective, nmin, Rwindow, budget, Lgrew = grew), nmv[],
         (; arnoldi = t_arn, gkl = t_gkl, pool = t_pool, grid = t_grid, total = time() - t0))
 end
 
