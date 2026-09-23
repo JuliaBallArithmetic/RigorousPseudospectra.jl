@@ -191,7 +191,8 @@ function plan_split(op::LinOp, Amul, Aadj; Rs = nothing, mmax::Integer = 12,
             s22 = _sigma22_est(R, g, m)
             gate = γ1 * γ2 < R * s22
             marg = γ1 * γ2 > 0 ? s11 * s22 / (γ1 * γ2) : Inf
-            push!(rows, (; R, ks, m, dimQ = k, gbar = g[1], gbar_m = _gbar_est(g, m),
+            push!(rows, (; R, ks, m, dimQ = k, nout = count(θ -> abs(θ) > R, λ),
+                gbar = g[1], gbar_m = _gbar_est(g, m),
                 s22, γ1, γ2, s11, gate, margin = marg,
                 assembly = gate && marg > Float64(amargin)))
         end
@@ -199,8 +200,11 @@ function plan_split(op::LinOp, Amul, Aadj; Rs = nothing, mmax::Integer = 12,
     t_grid = time() - t3
 
     feas = [r for r in rows if r.assembly]
+    # What the method is for is certifying as many eigenvalues as possible with as small a frame as
+    # possible; once a point is feasible, further margin buys nothing. So the order is the count
+    # outside first, then the frame size, and the margin only breaks what is left.
     best = isempty(feas) ? nothing :
-           sort(feas; by = r -> (-r.margin, r.dimQ))[1]
+           sort(feas; by = r -> (-r.nout, r.dimQ, -r.margin))[1]
 
     # for each (R, m) with nothing feasible, where the grid says dim Q would have to be
     pred = NamedTuple[]
@@ -269,10 +273,23 @@ function plan_table(p::SplitPlan; io = stdout, all::Bool = false)
             rpad(round(r.s11; sigdigits = 4), 12),
             rpad(round(r.margin; sigdigits = 4), 12), rpad(r.gate, 6), r.assembly)
     end
+    # the trade-off itself: for each number of eigenvalues that can be put outside, the smallest
+    # frame that does it. One chosen point hides this curve, and the curve is what a user chooses
+    # from.
+    if !isempty(p.feasible)
+        println(io, "eigenvalues outside, against the smallest frame that certifies them:")
+        for nz in sort(unique([r.nout for r in p.feasible]); rev = true)
+            sub = [r for r in p.feasible if r.nout == nz]
+            b = sort(sub; by = r -> (r.dimQ, -r.margin))[1]
+            println(io, "   ", lpad(nz, 4), " outside   dim Q ", lpad(b.dimQ, 6),
+                "   R = ", round(b.R; sigdigits = 6), "   m = ", b.m,
+                "   margin ", round(b.margin; sigdigits = 4))
+        end
+    end
     if p.best !== nothing
         b = p.best
         println(io, "best feasible: R = ", b.R, ", m = ", b.m, ", ks = ", b.ks, ", dim Q = ",
-            b.dimQ, ", margin = ", round(b.margin; sigdigits = 4))
+            b.dimQ, ", ", b.nout, " outside, margin = ", round(b.margin; sigdigits = 4))
     elseif !isempty(p.predicted)
         println(io, "no feasible point on the grid; the grid extrapolates to")
         for q in p.predicted[1:min(6, end)]
