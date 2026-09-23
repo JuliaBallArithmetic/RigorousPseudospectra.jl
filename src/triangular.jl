@@ -98,18 +98,23 @@ function _tri_coupling_fro(T::AbstractMatrix, cuts::AbstractVector{<:Integer})
     return out
 end
 
-"Floating-point `min_{j ≤ mmax} ‖B^j‖^{1/j}`, stopping as soon as it falls below `R`."
-function _tri_fp_power(B::AbstractMatrix, R::Real, mmax::Integer)
-    isempty(B) && return 0.0
-    g = Inf
+"""
+Floating-point `‖B^j‖` for `j = 1, 2, …`, stopping as soon as eq:farpower gives a positive bound
+on `σ_min(B − z)` at `|z| = R`, or at `mmax`. These are norms of powers, which is what
+[`farpower_lo`](@ref) consumes; the `j`-th roots bound the spectral radius and are not usable in
+their place.
+"""
+function _tri_fp_powers(B::AbstractMatrix, R::Real, mmax::Integer)
+    isempty(B) && return Float64[0.0]
     P = Matrix(B)
     Pj = P
+    gs = Float64[]
     for j in 1:mmax
-        g = min(g, opnorm(Pj)^(1 / j))
-        g < R && break
+        push!(gs, opnorm(Pj))
+        farpower_lo(ComplexF64(R), gs) > 0 && break
         j < mmax && (Pj = Pj * P)
     end
-    return g
+    return gs
 end
 
 """
@@ -169,12 +174,13 @@ function triangular_split(G, M, R::Real; α::Real = 0.0, factor::Real = 2.0,
     rows = NamedTuple[]
     for p in short
         c = p.c
-        g = _tri_fp_power(Matrix(view(T, (c + 1):k, (c + 1):k)), R, mmax)
-        g < R || continue
+        gs = _tri_fp_powers(Matrix(view(T, (c + 1):k, (c + 1):k)), R, mmax)
+        s22 = farpower_lo(ComplexF64(R), gs)
+        s22 > 0 || continue
         s11 = minimum(sigma11_estimate(view(T, 1:c, 1:c), R * cis(2π * t / nθ)) for t in 0:(nθ - 1))
         s11 > 0 || continue
         n12 = opnorm(Matrix(view(T, 1:c, (c + 1):k)))
-        s22 = R - g
+        g = minimum(gs[j]^(1 / j) for j in eachindex(gs))
         push!(rows, (; c, score = s11 * s22 / (s11 + s22 + n12), n12, n12f = p.n12f, g, s11))
     end
     isempty(rows) && return nothing
@@ -196,6 +202,8 @@ function triangular_split(G, M, R::Real; α::Real = 0.0, factor::Real = 2.0,
     γ2 = addu(opnorm_up(_tri_blockball(That, rest, cur)), corr)
     P11 = _tri_blockball(That, cur, cur)
     Pdeep = _tri_blockball(That, rest, rest)
+    # the certified norms of the powers of the trailing block; the loop stops as soon as
+    # eq:farpower gives a positive σ22 on |z| = R, since further powers cannot be needed
     gj = Float64[]
     Nj = Pdeep
     gbar = Inf
@@ -203,7 +211,9 @@ function triangular_split(G, M, R::Real; α::Real = 0.0, factor::Real = 2.0,
         j > 1 && (Nj = _bmul(Nj, Pdeep))
         push!(gj, opnorm_up(Nj; svd = false))
         gbar = min(gbar, nextfloat(gj[end]^(1 / j)))
-        gbar < R && break
+        g1c = addu(gj[1], corr)
+        gc = [addu(gj[i], subu(powu(g1c, i), powd(gj[1], i))) for i in eachindex(gj)]
+        farpower_lo(ComplexF64(R), gc) > 0 && break
     end
     gbar = addu(gbar, corr)
     return TriangularSplit(k, c, R, V, T, That, P11, Pdeep, γ1, γ2, gbar, gj, corr, nR2,
@@ -212,16 +222,35 @@ function triangular_split(G, M, R::Real; α::Real = 0.0, factor::Real = 2.0,
 end
 
 """
+    _tri_far_lo(ts, z) -> Float64
+
+A certified lower bound on `σ_min(T₂₂ − z)` for the trailing block. `ts.gj[j]` bounds `‖N^j‖` for
+the computed block `N`; the true block is `N + Δ` with `‖Δ‖ ≤ ts.corr`, and expanding the product
+gives `‖(N+Δ)^j‖ ≤ ‖N^j‖ + (‖N‖+corr)^j − ‖N‖^j`. The larger of eq:farshort at order one and
+eq:farpower over the orders available is returned.
+
+`ts.gbar`, the least of the `‖N^j‖^{1/j}`, is a bound on the spectral radius and **not** on a norm,
+so it must not be used here; doing so overstated `σ₂₂` by five orders on a strongly non-normal
+trailing block.
+"""
+function _tri_far_lo(ts::TriangularSplit, z::Number)
+    isempty(ts.gj) && return 0.0
+    g1 = addu(ts.gj[1], ts.corr)
+    gc = [addu(ts.gj[j], subu(powu(g1, j), powd(ts.gj[1], j))) for j in eachindex(ts.gj)]
+    return max(farshort_lo(z, g1), farpower_lo(z, gc))
+end
+
+"""
     sigma_tri_lo(ts, z) -> Float64
 
 The certified lower bound on `σ_min(G̃ − zM)` of the triangular route at `z`: one verified SVD of
-the leading block, the Neumann bound for the trailing one, and \\eqref{eq:assembly}. Returns 0
+the leading block, [`_tri_far_lo`](@ref) for the trailing one, and \\eqref{eq:assembly}. Returns 0
 when the hypothesis fails at `z`.
 """
 function sigma_tri_lo(ts::TriangularSplit, z::Number)
     s11 = subd(sigmin_lo(_bsub(ts.P11, _zm_ball_id(ts.c, z))), ts.corr)
     s11 > 0 || return 0.0
-    s22 = subd(absu(ComplexF64(z)), ts.gbar)
+    s22 = _tri_far_lo(ts, z)
     s22 > 0 || return 0.0
     num = subd(muld(s11, s22), mulu(ts.γ1, ts.γ2))
     num > 0 || return 0.0
