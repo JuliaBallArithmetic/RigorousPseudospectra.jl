@@ -5,9 +5,15 @@
 # hypothesis of Theorem thm:assembly is satisfied wherever both diagonal blocks are invertible, and
 # the whole price of the cut is the coupling above the diagonal in the denominator:
 #
-#     σ_min(G̃ − zM) ≥ (σ₁₁σ₂₂ − γ₁γ₂)/(σ₁₁ + σ₂₂ + γ₁ + γ₂) / (1 + α),
+#     σ_min(G̃ − zM) ≥ (σ₁₁σ₂₂ − γ₁γ₂)/(σ₁₁ + σ₂₂ + γ₁ + γ₂) / D,
 #     σ₁₁(z) = σ_min(T₁₁ − z)  by one verified SVD of the leading block,
-#     σ₂₂(z) ≥ |z| − ḡ₂₂       from the powers of the trailing block (Proposition prop:power).
+#     σ₂₂(z)                   from eq:farpower on the norms ‖T₂₂^j‖ (Proposition prop:power),
+#     D = ‖Y‖‖W‖(1 + α)/(1 − ‖R₂‖)  the certified cost of the change of basis.
+#
+# Two traps, both of which cost a round of wrong numbers. σ₂₂ is bounded through the norms of the
+# powers, never through min_j ‖T₂₂^j‖^{1/j}, which bounds the spectral radius and is smaller by
+# orders on a non-normal block. And the change of basis is chosen in floating point, so ‖Y‖, ‖W‖
+# and ‖R₂‖ have to be certified rather than taken to be one.
 #
 # The basis is unitary, so nothing here carries the conditioning of a block diagonalisation: there
 # is no κ and no β_Λ. The count follows from the same quantity, because the right-hand side is
@@ -24,8 +30,10 @@
 The Schur basis, the cut and the certified quantities of the triangular route. Fields: `k` the
 size, `c` the cut `k_EN`, `R` the radius, `V` and `T` the floating-point Schur factor and basis,
 `That` the ball `V*M⁻¹G̃V`, `P11` and `Pdeep` its diagonal blocks as balls, `γ1`, `γ2` the two
-couplings, `gbar` the bound on the deep tier with `gj` the power bounds it came from, `corr` the
-correction from `‖R₂‖`, `α` the frame defect, and `info` the scan.
+couplings, `gj[j] ≥ ‖T₂₂^j‖` the certified norms of the powers of the trailing block and `gbar`
+the least of their `j`-th roots (a bound on its spectral radius, reported but never used in a
+floor), `corr` the correction from `‖R₂‖`, `α` the frame defect, `divisor` the certified cost of
+the change of basis, and `info` the scan.
 """
 struct TriangularSplit
     k::Int
@@ -43,6 +51,7 @@ struct TriangularSplit
     corr::Float64
     nR2::Float64
     α::Float64
+    divisor::Float64
     info::NamedTuple
 end
 
@@ -198,6 +207,13 @@ function triangular_split(G, M, R::Real; α::Real = 0.0, factor::Real = 2.0,
     nR2 = opnorm_up(R2)
     nR2 < 1 || return nothing
     corr = divu(mulu(nR2, opnorm_up(That)), subd(1.0, nR2))
+    # The change of basis is chosen in floating point, so its cost has to be certified rather than
+    # assumed. With Y and W as here, Y(G̃ − zM)W = T̂ − z(I + R₂), and multiplying by (I + R₂)⁻¹
+    #     σ_min(G̃ − zM) ≥ (1 − ‖R₂‖) · σ_min(T̂ + Δ − zI) / (‖Y‖ ‖W‖),   ‖Δ‖ ≤ corr,
+    # so the floor is divided by ‖Y‖‖W‖/(1 − ‖R₂‖), and by (1 + α) for the frame as before. V is
+    # unitary only up to rounding and M⁻¹ is a floating-point inverse, so neither norm is one.
+    divisor = divu(mulu(mulu(opnorm_up(Yb), opnorm_up(Wb)), addu(1.0, Float64(α))),
+        subd(1.0, nR2))
     γ1 = addu(opnorm_up(_tri_blockball(That, cur, rest)), corr)
     γ2 = addu(opnorm_up(_tri_blockball(That, rest, cur)), corr)
     P11 = _tri_blockball(That, cur, cur)
@@ -217,7 +233,8 @@ function triangular_split(G, M, R::Real; α::Real = 0.0, factor::Real = 2.0,
     end
     gbar = addu(gbar, corr)
     return TriangularSplit(k, c, R, V, T, That, P11, Pdeep, γ1, γ2, gbar, gj, corr, nR2,
-        Float64(α), (; scan = [(; r.c, r.score, r.n12, r.n12f, r.g) for r in rows], factor = Float64(factor),
+        Float64(α), divisor,
+        (; scan = [(; r.c, r.score, r.n12, r.n12f, r.g) for r in rows], factor = Float64(factor),
             bestscore))
 end
 
@@ -255,7 +272,7 @@ function sigma_tri_lo(ts::TriangularSplit, z::Number)
     num = subd(muld(s11, s22), mulu(ts.γ1, ts.γ2))
     num > 0 || return 0.0
     den = sumu((s11, s22, ts.γ1, ts.γ2))
-    return divd(divd(num, den), addu(1.0, ts.α))
+    return divd(divd(num, den), ts.divisor)
 end
 
 _zm_ball_id(n::Integer, z::Number) = BallMatrix(ComplexF64(z) * Matrix{ComplexF64}(I, n, n))
@@ -333,10 +350,12 @@ end
     cover_tri(ts, R; nθ = 32, η = 0.5, maxpoints = 20000, escalate = nothing)
 
 An adaptive cover of `|z| = R`. At a sample the bound is `sigma_tri_lo` (or the larger of it and
-`escalate(z)`, when an escalation is supplied); an arc of length `ℓ` is accepted when the bound
-exceeds `ℓ/η`, since the true `σ_min` is 1-Lipschitz. A positive bound that is too small for the
-arc is answered by bisecting, which costs two cheap evaluations; a zero bound is answered by
-escalating, since no refinement helps there.
+`escalate(z)`, when an escalation is supplied). An arc is accepted when the smaller of its two
+endpoint bounds exceeds `R·Δθ/2 + δ`, the distance from the nearer endpoint to the farthest point
+of the arc plus an allowance `δ = 8u·R` for the sample not lying exactly on the circle; `σ_min` is
+1-Lipschitz, so the floor over the arc is then the difference. `η` is accepted for compatibility
+and no longer used. A positive bound too small for the arc is answered by bisecting, which costs
+one cheap evaluation; a zero bound is answered by escalating, since no refinement helps there.
 
 Returns `(; ok, floor, count, npoints, nbisect, nescalate, time)`.
 """
@@ -344,36 +363,44 @@ function cover_tri(ts::TriangularSplit, R::Real = ts.R; nθ::Integer = 32, η::R
         maxpoints::Integer = 20000, escalate = nothing)
     t0 = time()
     R = Float64(R)
-    pts = [R * cis(2π * t / nθ) for t in 0:(nθ - 1)]
-    arcs = [(pts[i], pts[mod1(i + 1, nθ)]) for i in 1:nθ]
-    cache = Dict{ComplexF64, Float64}()
-    esc = Set{ComplexF64}()
+    # Arcs are carried as angle intervals, so the allowance is the arc length and not a chord.
+    # On the arc between θa and θb every point is within R(θb − θa)/2 of the nearer endpoint, and
+    # a computed sample sits within δ of the exact point of the circle at that angle; σ_min is
+    # 1-Lipschitz, so the arc is covered when min of the two endpoint bounds exceeds that sum, and
+    # the certified floor over the arc is the difference.
+    δ = mulu(8 * eps(Float64), R)
+    pt(θ) = R * cis(θ)
+    arcs = [(2π * t / nθ, 2π * (t + 1) / nθ) for t in 0:(nθ - 1)]
+    cache = Dict{Float64, Float64}()
+    esc = Set{Float64}()
+    bound(θ) = get!(() -> sigma_tri_lo(ts, pt(θ)), cache, θ)
     fl = Inf
     nb = 0
+    fail(θ) = (; ok = false, floor = 0.0, count = -1, npoints = length(cache), nbisect = nb,
+        nescalate = length(esc), time = time() - t0, zfail = pt(θ))
     while !isempty(arcs)
-        za, zb = pop!(arcs)
-        b = get!(() -> sigma_tri_lo(ts, za), cache, za)
-        ℓ = abs(zb - za)
-        if b <= 0 && escalate !== nothing && !(za in esc)
-            push!(esc, za)
-            b = max(b, Float64(escalate(za)))
-            cache[za] = b
+        θa, θb = pop!(arcs)
+        ba, bb = bound(θa), bound(θb)
+        for (θ, b) in ((θa, ba), (θb, bb))
+            if b <= 0 && escalate !== nothing && !(θ in esc)
+                push!(esc, θ)
+                cache[θ] = max(b, Float64(escalate(pt(θ))))
+            end
         end
-        if b > ℓ / η
-            fl = min(fl, b)
+        ba, bb = cache[θa], cache[θb]
+        b = min(ba, bb)
+        allow = addu(mulu(R, (θb - θa) / 2), δ)
+        if b > allow
+            fl = min(fl, subd(b, allow))
         elseif b > 0
-            zm = (za + zb) / 2
-            zm = R * zm / abs(zm)
-            push!(arcs, (za, zm))
-            push!(arcs, (zm, zb))
+            θm = (θa + θb) / 2
+            push!(arcs, (θa, θm))
+            push!(arcs, (θm, θb))
             nb += 1
         else
-            return (; ok = false, floor = 0.0, count = -1, npoints = length(cache), nbisect = nb,
-                nescalate = length(esc), time = time() - t0, zfail = za)
+            return fail(ba <= 0 ? θa : θb)
         end
-        length(cache) > maxpoints &&
-            return (; ok = false, floor = 0.0, count = -1, npoints = length(cache), nbisect = nb,
-                nescalate = length(esc), time = time() - t0, zfail = za)
+        length(cache) > maxpoints && return fail(θa)
     end
     return (; ok = true, floor = fl, count = count_tri(ts), npoints = length(cache), nbisect = nb,
         nescalate = length(esc), time = time() - t0, zfail = ComplexF64(NaN))
