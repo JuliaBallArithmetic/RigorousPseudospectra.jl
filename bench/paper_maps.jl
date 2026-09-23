@@ -62,8 +62,7 @@ function build(name)
     o = ps_operator(name)
     op = LinOp(o.A)
     # the radius and the frame are the planner's, not a radius read off a dense eigendecomposition
-    kss = filter(k -> 2k + 60 < o.n, [20, 50, 100, 150, 300, 600, 900])
-    t_plan = @elapsed (pl = plan_split(op, o.matvec, o.adjoint; kss, mmax = 12, nR = 6,
+    t_plan = @elapsed (pl = plan_split(op, o.matvec, o.adjoint; mmax = 12, nR = 6,
         amargin = 1.5, Leig = 200))
     pl.best === nothing && error("$name: the planner found no feasible point")
     b = pl.best

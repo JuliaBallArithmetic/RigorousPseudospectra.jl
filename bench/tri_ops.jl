@@ -58,9 +58,9 @@ off a dense eigenvalue decomposition would be an oracle no user has, and a certi
 at one says nothing about the method.
 """
 function pick_radius(o, op)
-    kss = filter(k -> 2k + 60 < o.n, [20, 50, 100, 150, 300, 600, 900])
-    isempty(kss) && return nothing
-    t = @elapsed (pl = RP.plan_split(op, o.matvec, o.adjoint; kss, mmax = 12, nR = 6,
+    # no frame ladder is supplied: the planner grows the Lanczos from its budget and derives the
+    # ladder from the length it reaches
+    t = @elapsed (pl = RP.plan_split(op, o.matvec, o.adjoint; mmax = 12, nR = 6,
         amargin = 1.5, Leig = 200))
     if pl.best === nothing
         @printf("\n--- %s  n = %d  planner: %d grid points, none feasible (%d matvecs, %.1f s)\n",
