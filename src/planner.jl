@@ -23,7 +23,10 @@
 """
     SplitPlan
 
-Output of [`plan_split`](@ref). `rows` is the grid, one entry per `(R, ks, m)` with the estimated
+Output of [`plan_split`](@ref). Two ways to ask it a question: give `Rs` to fix the radius outside
+which everything is to be bounded, and the grid ranges over frames and orders at that radius alone;
+or give `nmin` to fix how many eigenvalues are to be certified, and the radius is chosen. With
+neither, the cheapest feasible point is taken. `rows` is the grid, one entry per `(R, ks, m)` with the estimated
 `gbar[j]`, `σ22`, `γ1`, `γ2`, `σ11`, and the two conditions; `feasible` the sub-list on which both
 hold; `best` the feasible row with the largest margin (fewest frame columns among ties), or
 `nothing`. `predicted` records, for each `(R, m)` on which no frame on the grid is feasible, the
@@ -134,7 +137,11 @@ function plan_split(op::LinOp, Amul, Aadj; Rs = nothing, mmax::Integer = 12,
             a[j] > a[j + 1] * (1 + 1e-9) && push!(gaps, sqrt(a[j] * a[j + 1]))
         end
     end
-    target = isempty(gaps) ? 0.0 : minimum(gaps)
+    # how deep the singular values have to be seen: down to the radius the caller asked for, or,
+    # when the caller asked for none, down to the smallest gap between Ritz moduli, since a radius
+    # can only be placed in a gap
+    target = Rs !== nothing ? minimum(Float64.(collect(Rs))) :
+             isempty(gaps) ? 0.0 : minimum(gaps)
     local Vr, Ul, σ, L
     if kss !== nothing || Lsv !== nothing
         kmax0 = kss === nothing ? [16, 32, 64] : sort(collect(Int.(kss)))
