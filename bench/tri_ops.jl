@@ -57,33 +57,42 @@ estimates of the two conditions over a grid. That is what the method prescribes 
 off a dense eigenvalue decomposition would be an oracle no user has, and a certificate that fails
 at one says nothing about the method.
 """
-function pick_radius(o, op)
+function plan(o, op; kw...)
     # no frame ladder is supplied: the planner grows the Lanczos from its budget and derives the
     # ladder from the length it reaches
     t = @elapsed (pl = RP.plan_split(op, o.matvec, o.adjoint; mmax = 12, nR = 6,
-        amargin = 1.5, Leig = 200))
-    if pl.best === nothing
-        @printf("\n--- %s  n = %d  planner: %d grid points, none feasible (%d matvecs, %.1f s)\n",
-            o.name, o.n, length(pl.rows), pl.nmatvec, t)
-        return nothing
-    end
-    b = pl.best
-    return (; b.R, count_used = -1, b.ks, b.m, how = "the planner's feasible point",
-        feasible = length(pl.feasible), nmatvec = pl.nmatvec, t_plan = t)
+        amargin = 1.5, Leig = 200, kw...))
+    return pl, t
 end
 
-function run_target(o, λ, rows)
-    op = o.A === nothing ? RP.LinOp(o.matvec, o.adjoint, o.n; epsA = o.epsA) : RP.LinOp(o.A)
-    pr = pick_radius(o, op)
-    pr === nothing && return
-    R, c = pr.R, pr.count_used
-    @printf("\n--- %s  n = %d  %s,  R = %.10g\n", o.name, o.n, pr.how, R)
+"""
+The points of the planner's trade-off front worth certifying: for each number of eigenvalues it
+can put outside, the cheapest frame that does it, capped at `nmax` of them so that a wide front
+does not turn into a day of runs.
+"""
+function front(pl; nmax::Integer = 6)
+    isempty(pl.feasible) && return NamedTuple[]
+    pts = NamedTuple[]
+    for nz in sort(unique([r.nout for r in pl.feasible]); rev = true)
+        sub = [r for r in pl.feasible if r.nout == nz]
+        push!(pts, sort(sub; by = r -> (r.cost, r.dimQ))[1])
+    end
+    length(pts) <= nmax && return pts
+    # keep the extremes and spread the rest over the front
+    idx = unique(round.(Int, range(1, length(pts); length = nmax)))
+    return pts[idx]
+end
+
+"One point of the front, certified: the frame, the split, the circle, and what it cost."
+function certify_at(o, op, λ, pr, label, rows)
+    R = pr.R
+    @printf("\n--- %s  n = %d  %s: R = %.10g, ks = %d, %d outside predicted, %s arcs predicted\n",
+        o.name, o.n, label, R, pr.ks, pr.nout,
+        isfinite(pr.arcs) ? string(round(Int, pr.arcs)) : "-")
     flush(stdout)
 
-    t_frame = @elapsed ((Q, finfo) = pr.ks === nothing ?
-        RP.choose_frame(op, o.matvec, o.adjoint, R; kmax = o.kmax) :
-        RP.two_sided_frame(o.matvec, o.adjoint, o.n, R; ks = pr.ks, Leig = 200,
-            Lsv = min(o.n, 2pr.ks + 60), T = op.T))
+    t_frame = @elapsed ((Q, finfo) = RP.two_sided_frame(o.matvec, o.adjoint, o.n, R;
+        ks = pr.ks, Leig = 200, Lsv = min(o.n, 2pr.ks + 60), T = op.T))
     t_split = @elapsed (sc = RP.certify_split(op, Q; target = R, compression = :none))
     @printf("    frame: ks = %d, dim Q = %d, α = %.3e, ḡ = %.6g, ā = %.6g, γ1 = %.3e, γ2 = %.3e (%.1f s + %.1f s)\n",
         finfo.ks, finfo.dimQ, sc.α, sc.gbar, sc.abar, sc.γ1, sc.γ2, t_frame, t_split)
@@ -95,8 +104,9 @@ function run_target(o, λ, rows)
     t_tri = @elapsed ts = RP.triangular_split(sc.G, sc.M, R; α = sc.α, factor = 2.0)
     if ts === nothing
         println("    triangular_split declined: no admissible cut brings the trailing block below R")
-        push!(rows, (; op = o.name, o.n, R, dimQ = finfo.dimQ,
-            ks = pr.ks, pr.how, pr.feasible, pr.nmatvec, pr.t_plan, sc.α, sc.gbar, sc.abar, sc.γ1, sc.γ2, gate, declined = true,
+        push!(rows, (; op = o.name, o.n, R, label, dimQ = finfo.dimQ,
+            ks = pr.ks, nout_pred = pr.nout, arcs_pred = pr.arcs, cost_pred = pr.cost,
+            arcs = -1, sc.α, sc.gbar, sc.abar, sc.γ1, sc.γ2, gate, declined = true,
             cut = -1, tri_γ1 = NaN, tri_γ2 = NaN, tri_gbar = NaN, nR2 = NaN,
             hyp_ok = false, region_ok = false, floor = 0.0, count = -1, ndiscs = 0,
             dense_count = count(z -> abs(z) > R, λ), nsig = 0, nbad = 0, worst = NaN,
@@ -110,11 +120,14 @@ function run_target(o, λ, rows)
     σ22lo(z) = max(RP.farshort_lo(z, sc.gbar), RP.farpower_lo(z, sc.gbars_power))
     t_ext = @elapsed ext = RP.certify_exterior_tri(ts, sc.gbar, sc.γ1, sc.γ2; R, σ22lo,
         nθ = NTHETA, maxdepth = MAXDEPTH)
+    arcs_actual = ext.exterior.nevals
     dense_count = count(z -> abs(z) > R, λ)
     @printf("    cor:agree: hypothesis %s, region %s, floor %.4e, count %s (dense %d), %d discs, all closed %s (%.1f s)\n",
         ext.exterior.ok, ext.exterior.region_ok, ext.exterior.floor,
         ext.exterior.ok ? string(ext.count) : "none", dense_count, length(ext.discs), ext.ok,
         t_ext)
+    @printf("    the cover: %d evaluations against %s predicted by the planner\n",
+        arcs_actual, isfinite(pr.arcs) ? string(round(Int, pr.arcs)) : "-")
     flush(stdout)
 
     # the certified floor against dense truth, three circles, 24 angles each
@@ -143,8 +156,9 @@ function run_target(o, λ, rows)
             nsig, nbad, isfinite(worst) ? worst : NaN)
     end
 
-    push!(rows, (; op = o.name, o.n, R, dimQ = finfo.dimQ,
-        ks = pr.ks, pr.how, pr.feasible, pr.nmatvec, pr.t_plan, sc.α, sc.gbar, sc.abar, sc.γ1, sc.γ2, gate, declined = false,
+    push!(rows, (; op = o.name, o.n, R, label, dimQ = finfo.dimQ,
+        ks = pr.ks, nout_pred = pr.nout, arcs_pred = pr.arcs, cost_pred = pr.cost,
+        arcs = arcs_actual, sc.α, sc.gbar, sc.abar, sc.γ1, sc.γ2, gate, declined = false,
         cut = ts.c, tri_γ1 = ts.γ1, tri_γ2 = ts.γ2, tri_gbar = ts.gbar, nR2 = ts.nR2,
         hyp_ok = ext.exterior.ok, region_ok = ext.exterior.region_ok,
         floor = ext.exterior.floor, count = ext.exterior.ok ? ext.count : -1,
@@ -166,10 +180,40 @@ function main(names)
         flush(stdout)
         λ, src = spectrum(o)
         println("    spectrum from ", src)
-        try
-            run_target(o, λ, rows)
-        catch err
-            @warn "run failed" o.name err
+        op = o.A === nothing ? RP.LinOp(o.matvec, o.adjoint, o.n; epsA = o.epsA) :
+             RP.LinOp(o.A)
+        pl, t = plan(o, op)
+        @printf("planner: %d grid points, %d feasible, %d matvecs, %.1f s (Lanczos stopped: %s)\n",
+            length(pl.rows), length(pl.feasible), pl.nmatvec, t, pl.params.Lgrew)
+        flush(stdout)
+        pts = front(pl)
+        if isempty(pts)
+            isempty(pl.predicted) ||
+                @printf("  none feasible; the grid says dim Q ≈ %.0f would be needed at R = %.6g\n",
+                    pl.predicted[1].dimQ_needed, pl.predicted[1].R)
+        end
+        # the front: one certificate per achievable number of eigenvalues outside
+        for pr in pts
+            try
+                certify_at(o, op, λ, pr, "front, $(pr.nout) outside", rows)
+            catch err
+                @warn "certificate failed" o.name pr.nout err
+            end
+        end
+        # windows: ask for a circle in an annulus rather than at a point, at a few widths
+        a = sort(abs.(λ); rev = true)
+        for (j, w) in ((2, 4), (5, 4), (10, 4))
+            j + 1 <= length(a) || continue
+            r = sqrt(a[j] * a[j + 1])
+            plw, tw = plan(o, op; Rwindow = (r / w, r * w))
+            plw.best === nothing && continue
+            b = plw.best
+            try
+                certify_at(o, op, λ, b,
+                    @sprintf("window [%.4g, %.4g], %d matvecs", r / w, r * w, plw.nmatvec), rows)
+            catch err
+                @warn "window certificate failed" o.name j err
+            end
         end
     end
     isempty(rows) && return
