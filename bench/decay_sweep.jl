@@ -59,7 +59,7 @@ function main(names)
             2ks + 60 < o.n || continue
             t = @elapsed begin
                 Q, fi = RP.two_sided_frame(o.matvec, o.adjoint, o.n, R; ks, Leig = 200,
-                    Lsv = min(o.n, 2ks + 60), T = Float64)
+                    Lsv = min(o.n, 2ks + 60), T = op.T)
                 sc = RP.certify_split(op, Q; target = R, compression = :none)
             end
             @printf("  ks %4d  dim Q %5d  ḡ = %.6e  ā = %.6e  ḡ/ā = %.4e  γ1 = %.3e  γ2 = %.3e  (%.1f s)\n",
