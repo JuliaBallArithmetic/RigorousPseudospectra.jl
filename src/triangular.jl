@@ -288,6 +288,44 @@ that of the block diagonal, read off the Schur diagonal.
 count_tri(ts::TriangularSplit) = count(z -> abs(z) > ts.R, diag(ts.T))
 
 """
+    _cover_kernel(floorfun, c, r; η, samples, maxarcs) -> NamedTuple
+
+One certified cover of the circle `|z − c| = r`, through
+`BallArithmetic.CertifScripts.adaptive_arcs!`. `floorfun(z)` returns a certified lower bound on
+`σ_min(A − zI)`; an arc is accepted when its chord is at most `η` times the bound at one endpoint,
+and bisected otherwise.
+
+`σ_min` is 1-Lipschitz and on an arc of at most half a circle the farthest point from an endpoint
+is the other endpoint, so the chord is the exact allowance and an accepted arc carries
+`σ ≥ σ_a − ℓ ≥ (1 − η)σ_a`. Bisection takes the midpoint of the chord, so the contour certified is
+the polygon inscribed in the circle, within the sagitta `r(1 − cos(π/samples))` of it.
+
+Returns `(; ok, floor, npoints, nbisect, sagitta, rmin, reason)`, `rmin` being the least `|z|` over
+the samples, which is what a region condition has to be tested against rather than `r`.
+"""
+function _cover_kernel(floorfun, c::Number, r::Real; η::Real = 0.5,
+        samples::Integer = 256, maxarcs::Integer = 200_000)
+    CS = BallArithmetic.CertifScripts
+    r = Float64(r)
+    circle = CS.CertificationCircle(ComplexF64(c), r; samples)
+    arcs = collect(CS._initial_arcs(circle))
+    cache = Dict{ComplexF64, Any}()
+    evaluator = z -> (; z = ComplexF64(z), val = Ball(floorfun(z), 0.0),
+        second_val = Ball(0.0, 0.0))
+    res = CS.adaptive_arcs!(arcs, cache, Dict{Int, Any}(), Float64(η); evaluator, maxarcs)
+    sag = mulu(r, subd(1.0, cos(π / samples)))
+    npoints = length(cache)
+    if !res.ok
+        return (; ok = false, floor = 0.0, npoints, nbisect = res.processed, sagitta = sag,
+            rmin = 0.0, reason = res.reason)
+    end
+    σmin = minimum(Float64(v[1].c) - Float64(v[1].r) for v in values(cache))
+    rmin = minimum(absd(z) for z in keys(cache))
+    return (; ok = true, floor = muld(subd(1.0, Float64(η)), σmin), npoints,
+        nbisect = res.processed, sagitta = sag, rmin, reason = :complete)
+end
+
+"""
     certify_exterior_tri(ts, gbar, γ1, γ2; R = ts.R, σ22lo = nothing, nθ = 64, maxdepth = 6,
                          nradii = 12, tol = 1e-8) -> NamedTuple
 
@@ -296,7 +334,7 @@ and `γ2` are the frame's own certified quantities, those of the far block and t
 and `σ22lo` an optional sharper lower bound on σ22 than `|z| − gbar`.
 
 Three statements, in order. On `|z| = R` the hypothesis of Theorem thm:assembly is certified by
-[`check_circle`](@ref) with the arc-wise Lipschitz refinement, which makes the floor a bound over
+the kernel's adaptive refinement, which makes the floor a bound over
 the whole circle and not only at the samples. The count outside is then that of the compression,
 [`count_tri`](@ref), by the homotopy in the coupling. And around each eigenvalue of the Schur
 factor lying outside `R` a disc is certified by the same test, at the first radius on a geometric
@@ -306,13 +344,29 @@ that the discs are disjoint.
 Returns `(; ok, R, count, exterior, discs)`, with `ok` true when the circle and every disc closed.
 """
 function certify_exterior_tri(ts::TriangularSplit, gbar::Real, γ1::Real, γ2::Real;
-        R::Real = ts.R, σ22lo = nothing, nθ::Int = 64, maxdepth::Int = 6, nradii::Int = 12,
-        tol::Real = 1e-8)
+        R::Real = ts.R, σ22lo = nothing, η::Real = 0.5, samples::Integer = 256,
+        maxarcs::Integer = 200_000, nradii::Int = 12, tol::Real = 1e-8,
+        nθ::Int = 0, maxdepth::Int = 0)
     R = Float64(R)
-    σ11 = z -> sigma_tri_lo(ts, z)
-    chk = check_circle(σ11, gbar, γ1, γ2, 0, R; region = :exterior, nθ, maxdepth, σ22lo)
+    far = σ22lo === nothing ? (z -> farshort_lo(z, gbar)) : σ22lo
+    function floorfun(z)
+        s11 = sigma_tri_lo(ts, z)
+        s11 > 0 || return 0.0
+        s22 = far(z)
+        s22 > 0 || return 0.0
+        f1, _ = assembly_floor(s11, s22, γ1, γ2)
+        f2, _ = blockdom_floor(s11, s22, γ1, γ2)
+        return max(f1, f2)
+    end
+    chk = _cover_kernel(floorfun, 0, R; η, samples, maxarcs)
     discs = NamedTuple[]
-    (chk.ok && chk.region_ok) || return (; ok = false, R, count = -1, exterior = chk, discs)
+    # the region condition of prop:count, tested against the polygon and not the circle
+    region_ok = chk.ok && chk.rmin > Float64(gbar)
+    # an eigenvalue could sit between the polygon and the circle, outside the contour certified and
+    # inside the circle the count is taken over, unless the floor exceeds the sagitta
+    count_ok = chk.ok && chk.floor > chk.sagitta
+    (chk.ok && region_ok && count_ok) ||
+        return (; ok = false, R, count = -1, exterior = chk, discs, region_ok, count_ok)
     λ = diag(ts.T)
     out = [z for z in λ if abs(z) > R]
     centres = ComplexF64[]
@@ -330,9 +384,8 @@ function certify_exterior_tri(ts::TriangularSplit, gbar::Real, γ1::Real, γ2::R
         found = false
         if rmin < rmax
             for r in exp.(range(log(rmin), log(rmax * (1 - 1e-6)); length = nradii))
-                ck = check_circle(σ11, gbar, γ1, γ2, c, r; region = :interior, nθ, maxdepth,
-                    σ22lo)
-                if ck.ok && ck.region_ok
+                ck = _cover_kernel(floorfun, c, r; η, samples, maxarcs)
+                if ck.ok && subd(absd(c), r) > Float64(gbar) && ck.floor > ck.sagitta
                     push!(discs, (; center = c, radius = r,
                         count = count(z -> abs(z - c) < r, λ), check = ck))
                     found = true
@@ -343,65 +396,53 @@ function certify_exterior_tri(ts::TriangularSplit, gbar::Real, γ1::Real, γ2::R
         found || (ok = false; push!(discs, (; center = c, radius = NaN, count = -1,
             check = nothing)))
     end
-    return (; ok, R, count = count_tri(ts), exterior = chk, discs)
+    return (; ok, R, count = count_tri(ts), exterior = chk, discs, region_ok, count_ok)
 end
 
 """
-    cover_tri(ts, R; nθ = 32, η = 0.5, maxpoints = 20000, escalate = nothing)
+    cover_tri(ts, R; η = 0.5, samples = 256, maxarcs = 200_000)
 
-An adaptive cover of `|z| = R`. At a sample the bound is `sigma_tri_lo` (or the larger of it and
-`escalate(z)`, when an escalation is supplied). An arc is accepted when the smaller of its two
-endpoint bounds exceeds `R·Δθ/2 + δ`, the distance from the nearer endpoint to the farthest point
-of the arc plus an allowance `δ = 8u·R` for the sample not lying exactly on the circle; `σ_min` is
-1-Lipschitz, so the floor over the arc is then the difference. `η` is accepted for compatibility
-and no longer used. A positive bound too small for the arc is answered by bisecting, which costs
-one cheap evaluation; a zero bound is answered by escalating, since no refinement helps there.
+A certified cover of the contour `|z| = R` for the compression alone, through the kernel's
+adaptive refinement, `BallArithmetic.CertifScripts.adaptive_arcs!`: the circle is discretised,
+each arc is accepted when its chord is at most `η` times the bound at one endpoint, and bisected
+otherwise. The bisection takes the midpoint of the chord, so what is certified is the polygon
+inscribed in the circle; starting from a fine discretisation is what keeps the two together, and
+the deviation is the sagitta `R(1 − cos(π/samples))`.
 
-Returns `(; ok, floor, count, npoints, nbisect, nescalate, time)`.
+`σ_min` is 1-Lipschitz and on an arc of at most half a circle the farthest point from an endpoint
+is the other endpoint, so the chord is the right allowance and an accepted arc carries
+`σ ≥ σ_a − ℓ ≥ (1 − η)σ_a`. The floor returned is `(1 − η)` times the least bound seen.
+
+The count is that of the compression outside `R`, and it is reported only when the floor exceeds
+the sagitta: an eigenvalue could otherwise sit between the polygon and the circle, outside the
+contour that was certified and inside the circle the count is taken over.
+
+Returns `(; ok, floor, count, npoints, nbisect, sagitta, reason, time)`.
 """
-function cover_tri(ts::TriangularSplit, R::Real = ts.R; nθ::Integer = 32, η::Real = 0.5,
-        maxpoints::Integer = 20000, escalate = nothing)
+function cover_tri(ts::TriangularSplit, R::Real = ts.R; η::Real = 0.5,
+        samples::Integer = 256, maxarcs::Integer = 200_000, escalate = nothing)
     t0 = time()
     R = Float64(R)
-    # Arcs are carried as angle intervals, so the allowance is the arc length and not a chord.
-    # On the arc between θa and θb every point is within R(θb − θa)/2 of the nearer endpoint, and
-    # a computed sample sits within δ of the exact point of the circle at that angle; σ_min is
-    # 1-Lipschitz, so the arc is covered when min of the two endpoint bounds exceeds that sum, and
-    # the certified floor over the arc is the difference.
-    δ = mulu(8 * eps(Float64), R)
-    pt(θ) = R * cis(θ)
-    arcs = [(2π * t / nθ, 2π * (t + 1) / nθ) for t in 0:(nθ - 1)]
-    cache = Dict{Float64, Float64}()
-    esc = Set{Float64}()
-    bound(θ) = get!(() -> sigma_tri_lo(ts, pt(θ)), cache, θ)
-    fl = Inf
-    nb = 0
-    fail(θ) = (; ok = false, floor = 0.0, count = -1, npoints = length(cache), nbisect = nb,
-        nescalate = length(esc), time = time() - t0, zfail = pt(θ))
-    while !isempty(arcs)
-        θa, θb = pop!(arcs)
-        ba, bb = bound(θa), bound(θb)
-        for (θ, b) in ((θa, ba), (θb, bb))
-            if b <= 0 && escalate !== nothing && !(θ in esc)
-                push!(esc, θ)
-                cache[θ] = max(b, Float64(escalate(pt(θ))))
-            end
-        end
-        ba, bb = cache[θa], cache[θb]
-        b = min(ba, bb)
-        allow = addu(mulu(R, (θb - θa) / 2), δ)
-        if b > allow
-            fl = min(fl, subd(b, allow))
-        elseif b > 0
-            θm = (θa + θb) / 2
-            push!(arcs, (θa, θm))
-            push!(arcs, (θm, θb))
-            nb += 1
-        else
-            return fail(ba <= 0 ? θa : θb)
-        end
-        length(cache) > maxpoints && return fail(θa)
+    CS = BallArithmetic.CertifScripts
+    circle = CS.CertificationCircle(0.0, R; samples)
+    arcs = collect(CS._initial_arcs(circle))
+    cache = Dict{ComplexF64, Any}()
+    evaluator = function (z)
+        v = sigma_tri_lo(ts, z)
+        escalate === nothing || (v = max(v, Float64(escalate(z))))
+        return (; z = ComplexF64(z), val = Ball(v, 0.0), second_val = Ball(0.0, 0.0))
     end
-    return (; ok = true, floor = fl, count = count_tri(ts), npoints = length(cache), nbisect = nb,
-        nescalate = length(esc), time = time() - t0, zfail = ComplexF64(NaN))
+    res = CS.adaptive_arcs!(arcs, cache, Dict{Int, Any}(), Float64(η); evaluator, maxarcs)
+    npoints = length(cache)
+    sag = mulu(R, subd(1.0, cos(π / samples)))
+    if !res.ok
+        return (; ok = false, floor = 0.0, count = -1, npoints, nbisect = res.processed,
+            sagitta = sag, reason = res.reason, time = time() - t0, zfail = res.z)
+    end
+    σmin = minimum(Float64(v[1].c) - Float64(v[1].r) for v in values(cache))
+    fl = muld(subd(1.0, Float64(η)), σmin)
+    return (; ok = true, floor = fl, count = fl > sag ? count_tri(ts) : -1, npoints,
+        nbisect = res.processed, sagitta = sag,
+        reason = fl > sag ? :complete : :floor_below_sagitta, time = time() - t0,
+        zfail = ComplexF64(NaN))
 end

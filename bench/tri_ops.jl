@@ -33,8 +33,8 @@ mkpath(OUT)
 const HOST = gethostname()
 const NDENSE_EIG = 6000       # dense eigvals up to this n, Arnoldi Ritz values above it
 const NDENSE_SVD = 2200       # dense svdvals for the comparison up to this n
-const NTHETA = 64
-const MAXDEPTH = 6
+const NTHETA = 8          # start coarse; check_circle bisects where the Lipschitz test fails
+const MAXDEPTH = 9        # 8·2^9 = 4096 arcs, the reach the old 64 × 2^6 had
 
 const ORDER = ["rdb200", "rdb800l", "rdb2048", "rdb5000", "grcar500", "convdiff_cheb200",
     "davies200", "kahan500", "airy200", "orrsom200", "landau400", "hatano2000", "qh1484",
@@ -120,10 +120,10 @@ function certify_at(o, op, λ, pr, label, rows)
     σ22lo(z) = max(RP.farshort_lo(z, sc.gbar), RP.farpower_lo(z, sc.gbars_power))
     t_ext = @elapsed ext = RP.certify_exterior_tri(ts, sc.gbar, sc.γ1, sc.γ2; R, σ22lo,
         nθ = NTHETA, maxdepth = MAXDEPTH)
-    arcs_actual = ext.exterior.nevals
+    arcs_actual = ext.exterior.npoints
     dense_count = count(z -> abs(z) > R, λ)
     @printf("    cor:agree: hypothesis %s, region %s, floor %.4e, count %s (dense %d), %d discs, all closed %s (%.1f s)\n",
-        ext.exterior.ok, ext.exterior.region_ok, ext.exterior.floor,
+        ext.exterior.ok, ext.region_ok, ext.exterior.floor,
         ext.exterior.ok ? string(ext.count) : "none", dense_count, length(ext.discs), ext.ok,
         t_ext)
     @printf("    the cover: %d evaluations against %s predicted by the planner\n",
