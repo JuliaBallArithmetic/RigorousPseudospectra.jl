@@ -105,7 +105,8 @@ whole grid and the feasible region; see [`SplitPlan`](@ref).
 function plan_split(op::LinOp, Amul, Aadj; Rs = nothing, mmax::Integer = 12,
         kss = nothing, Leig::Integer = 120, Lsv = nothing, nθ::Integer = 24,
         amargin::Real = 1.5, nsamples::Integer = 4, nR::Integer = 6, droptol::Real = 1e-8,
-        η::Real = 0.5, objective::Symbol = :cost, T = nothing)
+        η::Real = 0.5, objective::Symbol = :cost, nmin::Integer = 1,
+        budget::Integer = 40_000, T = nothing)
     t0 = time()
     n = op.n
     TT = T === nothing ? op.T : T
@@ -119,11 +120,44 @@ function plan_split(op::LinOp, Amul, Aadj; Rs = nothing, mmax::Integer = 12,
     t_arn = time() - t0
 
     # --- the singular directions, one Golub-Kahan-Lanczos, shared by every grid point
+    #
+    # How far it has to run is not a matter of taste. The length L fixes the deepest singular value
+    # that can be seen, hence the floor σ_{2k+1} below which no radius is admissible, so a ladder
+    # chosen in advance also decides which radii may be considered. Instead the run is doubled
+    # until the floor drops below the smallest gap between Ritz moduli that is worth having, or
+    # until `budget` applications of A and A* are spent, whichever comes first. What is reported
+    # is how it stopped.
     t1 = time()
-    kmax = kss === nothing ? [16, 32, 64] : sort(collect(Int.(kss)))
-    L = Lsv === nothing ? min(n, 2 * maximum(kmax) + 40) : Int(Lsv)
-    Vr, Ul, σ = gkl(Amul, Aadj, n, L; T = TT)
-    nmv[] += 2L
+    gaps = Float64[]
+    let a = sort(abs.(λ); rev = true)
+        for j in 1:(length(a) - 1)
+            a[j] > a[j + 1] * (1 + 1e-9) && push!(gaps, sqrt(a[j] * a[j + 1]))
+        end
+    end
+    target = isempty(gaps) ? 0.0 : minimum(gaps)
+    local Vr, Ul, σ, L
+    if kss !== nothing || Lsv !== nothing
+        kmax0 = kss === nothing ? [16, 32, 64] : sort(collect(Int.(kss)))
+        L = Lsv === nothing ? min(n, 2 * maximum(kmax0) + 40) : Int(Lsv)
+        Vr, Ul, σ = gkl(Amul, Aadj, n, L; T = TT)
+        nmv[] += 2L
+        grew = "fixed"
+    else
+        L = min(n, 128)
+        grew = "budget"
+        while true
+            Vr, Ul, σ = gkl(Amul, Aadj, n, L; T = TT)
+            nmv[] += 2L
+            sv0 = Float64[abs(x) for x in σ]
+            (isempty(sv0) || last(sv0) < target) && (grew = "floor reached"; break)
+            L >= n && (grew = "the whole space"; break)
+            2L > Int(budget) - nmv[] && (grew = "budget spent"; break)
+            L = min(n, 2L)
+        end
+    end
+    kmax = kss === nothing ? unique(clamp.(round.(Int,
+            exp.(range(log(8), log(max(div(size(Vr, 2) - 1, 2), 8)); length = 7))), 1,
+            max(div(size(Vr, 2) - 1, 2), 1))) : sort(collect(Int.(kss)))
     ksmax = min(maximum(kmax), size(Vr, 2))
     # The floor, and the frame size each radius needs, both from the singular values the
     # Golub-Kahan-Lanczos has just returned, so neither costs a matvec.
@@ -216,12 +250,18 @@ function plan_split(op::LinOp, Amul, Aadj; Rs = nothing, mmax::Integer = 12,
     # prices the cover as well as the frame; `:count` takes the most eigenvalues outside, then the
     # smallest frame, which is what a user who wants depth at any price would choose. Neither is
     # certified: both read estimates.
+    # A per-eigenvalue cost is minimised by the smallest job, since the work is cubic in the frame,
+    # so the bare ratio drifts to cheap and shallow. `nmin` is the constraint that fixes it: the
+    # cheapest point that certifies at least that many eigenvalues. The front is reported whatever
+    # the choice, and choosing from it is the caller's.
+    elig = [r for r in feas if r.nout >= Int(nmin)]
+    isempty(elig) && (elig = feas)
     best = if isempty(feas)
         nothing
     elseif objective === :count
-        sort(feas; by = r -> (-r.nout, r.dimQ, -r.margin))[1]
+        sort(elig; by = r -> (-r.nout, r.dimQ, -r.margin))[1]
     else
-        sort(feas; by = r -> (r.cost, r.dimQ))[1]
+        sort(elig; by = r -> (r.cost, r.dimQ))[1]
     end
 
     # for each (R, m) with nothing feasible, where the grid says dim Q would have to be
@@ -248,7 +288,7 @@ function plan_split(op::LinOp, Amul, Aadj; Rs = nothing, mmax::Integer = 12,
     end
     return SplitPlan(best !== nothing, rows, feas, best, pred, ComplexF64.(λ), radii,
         (; Leig = min(Leig, n - 1), Lsv = L, droptol, nθ, amargin, nsamples, mmax, η,
-            objective), nmv[],
+            objective, nmin, budget, Lgrew = grew), nmv[],
         (; arnoldi = t_arn, gkl = t_gkl, pool = t_pool, grid = t_grid, total = time() - t0))
 end
 
