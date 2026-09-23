@@ -125,11 +125,21 @@ function plan_split(op::LinOp, Amul, Aadj; Rs = nothing, mmax::Integer = 12,
     Vr, Ul, σ = gkl(Amul, Aadj, n, L; T = TT)
     nmv[] += 2L
     ksmax = min(maximum(kmax), size(Vr, 2))
-    # the floor: prop:frame gives ḡ ≥ σ_{2k+1}(A) for a frame of k columns, so the smallest frame
-    # on the grid fixes how deep any radius can go. The singular values are the ones the
-    # Golub-Kahan-Lanczos has just returned, so this costs nothing.
-    jfloor = min(2 * minimum(kmax) + 1, length(σ))
-    rfloor = length(σ) == 0 ? 0.0 : Float64(σ[jfloor])
+    # The floor, and the frame size each radius needs, both from the singular values the
+    # Golub-Kahan-Lanczos has just returned, so neither costs a matvec.
+    #
+    # prop:frame gives ḡ ≥ σ_{2k+1}(A), so a radius below σ_{2k+1} is out of reach of a frame of k
+    # columns. The floor that discards only what no frame on the grid can reach is therefore the
+    # one at the largest frame, not the smallest; and for a radius above it, the smallest frame
+    # worth trying is the first k with σ_{2k+1} < R. These σ are Lanczos estimates and the interior
+    # ones are not accurate, which is why they are used to order the search and not to bound
+    # anything.
+    sv = Float64[abs(x) for x in σ]
+    kneeded(R) = begin
+        j = findfirst(j -> sv[j] < R, eachindex(sv))
+        j === nothing ? typemax(Int) : max(cld(j - 1, 2), 1)
+    end
+    rfloor = isempty(sv) ? 0.0 : sv[min(2 * maximum(kmax) + 1, length(sv))]
     radii = Rs === nothing ? candidate_radii(λ, nR; rmin = rfloor) :
             Float64.(collect(Rs))
     isempty(radii) && (radii = [sqrt(abs(λ[1]) * abs(λ[end]))])
@@ -152,7 +162,9 @@ function plan_split(op::LinOp, Amul, Aadj; Rs = nothing, mmax::Integer = 12,
     t3 = time()
     rows = NamedTuple[]
     for R in radii, ks in kmax
-        ks = min(ks, ksmax)
+        # the ladder starts where this radius first becomes reachable, so no grid point is spent
+        # on a frame that cannot hold the far block below R
+        ks = min(max(ks, kneeded(R)), ksmax)
         idx = vcat(eigcols(R), neig .+ (1:ks), neig + ksmax .+ (1:ks))
         idx = filter(i -> 1 <= i <= size(pool, 2), unique(idx))
         isempty(idx) && continue
