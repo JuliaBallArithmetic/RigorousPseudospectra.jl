@@ -1,8 +1,10 @@
 # The sixteen operators of the numerics section, end to end on the triangular route.
 #
-# The same operators, the same two target counts and the same placement of R as
-# `bench/pseudospectra_run.jl`, so the rows sit beside the earlier ones; what changes is the
-# treatment of the compression. The frame and the far block are as before,
+# One row per operator, at the radius and frame the planner chooses. The method sees the operator
+# only through matvecs: plan_split grids (R, ks, m), reports where the gate and thm:assembly can
+# hold, and the certificate is then run at its feasible point. An operator for which the planner
+# finds nothing feasible is reported as such, which is the method declining rather than failing.
+# The frame and the far block are as in pseudospectra_run.jl,
 #
 #     choose_frame  ->  certify_split(op, Q; compression = :none)  ->  α, ḡ, ā, γ1, γ2,
 #
@@ -29,7 +31,6 @@ BLAS.set_num_threads(parse(Int, get(ENV, "OPENBLAS_NUM_THREADS", "8")))
 const OUT = joinpath(homedir(), "ResearchData", "KrylovPseudospectra_Data", "pseudospectra")
 mkpath(OUT)
 const HOST = gethostname()
-const TARGETS = (10, 5)
 const NDENSE_EIG = 6000       # dense eigvals up to this n, Arnoldi Ritz values above it
 const NDENSE_SVD = 2200       # dense svdvals for the comparison up to this n
 const NTHETA = 64
@@ -39,16 +40,6 @@ const ORDER = ["rdb200", "rdb800l", "rdb2048", "rdb5000", "grcar500", "convdiff_
     "davies200", "kahan500", "airy200", "orrsom200", "landau400", "hatano2000", "qh1484",
     "nos3", "olm1000"]
 
-"The count raised until the two moduli that bracket R separate, so that R is not placed inside a
-conjugate pair."
-function admissible_count(a::AbstractVector, target::Integer; tol = 1e-9)
-    c = target
-    while c < length(a) - 1 && abs(a[c] - a[c + 1]) <= tol * max(1.0, a[c])
-        c += 1
-    end
-    return c
-end
-
 "The leading eigenvalues, dense where the size allows and Ritz values above it."
 function spectrum(o)
     if o.A !== nothing && o.n <= NDENSE_EIG
@@ -57,16 +48,42 @@ function spectrum(o)
     return RP._ritz_leading(o.matvec, o.n, Float64; L = 200), "Arnoldi Ritz values"
 end
 
-function run_target(o, λ, target::Integer, rows)
-    a = sort(abs.(λ); rev = true)
-    length(a) > target + 1 || return
-    c = admissible_count(a, target)
-    R = sqrt(a[c] * a[c + 1])
-    @printf("\n--- %s  n = %d  target %d -> count %d,  R = %.10g\n", o.name, o.n, target, c, R)
-    flush(stdout)
-    op = o.A === nothing ? RP.LinOp(o.matvec, o.adjoint, o.n; epsA = o.epsA) : RP.LinOp(o.A)
+"""
+The radius and the frame, from the planner and from nothing else.
 
-    t_frame = @elapsed ((Q, finfo) = RP.choose_frame(op, o.matvec, o.adjoint, R; kmax = o.kmax))
+`plan_split` sees the operator only through matvecs, and chooses `(R, ks, m)` from floating-point
+estimates of the two conditions over a grid. That is what the method prescribes and what
+`rem:predictor` describes, and it is the only radius a user could actually place: a radius read
+off a dense eigenvalue decomposition would be an oracle no user has, and a certificate that fails
+at one says nothing about the method.
+"""
+function pick_radius(o, op)
+    kss = filter(k -> 2k + 60 < o.n, [20, 50, 100, 150, 300, 600, 900])
+    isempty(kss) && return nothing
+    t = @elapsed (pl = RP.plan_split(op, o.matvec, o.adjoint; kss, mmax = 12, nR = 6,
+        amargin = 1.5, Leig = 200, T = Float64))
+    if pl.best === nothing
+        @printf("\n--- %s  n = %d  planner: %d grid points, none feasible (%d matvecs, %.1f s)\n",
+            o.name, o.n, length(pl.rows), pl.nmatvec, t)
+        return nothing
+    end
+    b = pl.best
+    return (; b.R, count_used = -1, b.ks, b.m, how = "the planner's feasible point",
+        feasible = length(pl.feasible), nmatvec = pl.nmatvec, t_plan = t)
+end
+
+function run_target(o, λ, rows)
+    op = o.A === nothing ? RP.LinOp(o.matvec, o.adjoint, o.n; epsA = o.epsA) : RP.LinOp(o.A)
+    pr = pick_radius(o, op)
+    pr === nothing && return
+    R, c = pr.R, pr.count_used
+    @printf("\n--- %s  n = %d  %s,  R = %.10g\n", o.name, o.n, pr.how, R)
+    flush(stdout)
+
+    t_frame = @elapsed ((Q, finfo) = pr.ks === nothing ?
+        RP.choose_frame(op, o.matvec, o.adjoint, R; kmax = o.kmax) :
+        RP.two_sided_frame(o.matvec, o.adjoint, o.n, R; ks = pr.ks, Leig = 200,
+            Lsv = min(o.n, 2pr.ks + 60), T = Float64))
     t_split = @elapsed (sc = RP.certify_split(op, Q; target = R, compression = :none))
     @printf("    frame: ks = %d, dim Q = %d, α = %.3e, ḡ = %.6g, ā = %.6g, γ1 = %.3e, γ2 = %.3e (%.1f s + %.1f s)\n",
         finfo.ks, finfo.dimQ, sc.α, sc.gbar, sc.abar, sc.γ1, sc.γ2, t_frame, t_split)
@@ -78,8 +95,8 @@ function run_target(o, λ, target::Integer, rows)
     t_tri = @elapsed ts = RP.triangular_split(sc.G, sc.M, R; α = sc.α, factor = 2.0)
     if ts === nothing
         println("    triangular_split declined: no admissible cut brings the trailing block below R")
-        push!(rows, (; op = o.name, o.n, target, count_used = c, R, dimQ = finfo.dimQ,
-            ks = finfo.ks, sc.α, sc.gbar, sc.abar, sc.γ1, sc.γ2, gate, declined = true,
+        push!(rows, (; op = o.name, o.n, R, dimQ = finfo.dimQ,
+            ks = pr.ks, pr.how, pr.feasible, pr.nmatvec, pr.t_plan, sc.α, sc.gbar, sc.abar, sc.γ1, sc.γ2, gate, declined = true,
             cut = -1, tri_γ1 = NaN, tri_γ2 = NaN, tri_gbar = NaN, nR2 = NaN,
             hyp_ok = false, region_ok = false, floor = 0.0, count = -1, ndiscs = 0,
             dense_count = count(z -> abs(z) > R, λ), nsig = 0, nbad = 0, worst = NaN,
@@ -126,8 +143,8 @@ function run_target(o, λ, target::Integer, rows)
             nsig, nbad, isfinite(worst) ? worst : NaN)
     end
 
-    push!(rows, (; op = o.name, o.n, target, count_used = c, R, dimQ = finfo.dimQ,
-        ks = finfo.ks, sc.α, sc.gbar, sc.abar, sc.γ1, sc.γ2, gate, declined = false,
+    push!(rows, (; op = o.name, o.n, R, dimQ = finfo.dimQ,
+        ks = pr.ks, pr.how, pr.feasible, pr.nmatvec, pr.t_plan, sc.α, sc.gbar, sc.abar, sc.γ1, sc.γ2, gate, declined = false,
         cut = ts.c, tri_γ1 = ts.γ1, tri_γ2 = ts.γ2, tri_gbar = ts.gbar, nR2 = ts.nR2,
         hyp_ok = ext.exterior.ok, region_ok = ext.exterior.region_ok,
         floor = ext.exterior.floor, count = ext.exterior.ok ? ext.count : -1,
@@ -149,12 +166,10 @@ function main(names)
         flush(stdout)
         λ, src = spectrum(o)
         println("    spectrum from ", src)
-        for target in TARGETS
-            try
-                run_target(o, λ, target, rows)
-            catch err
-                @warn "run failed" o.name target err
-            end
+        try
+            run_target(o, λ, rows)
+        catch err
+            @warn "run failed" o.name err
         end
     end
     isempty(rows) && return
