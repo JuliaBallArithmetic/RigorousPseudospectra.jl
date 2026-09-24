@@ -99,7 +99,7 @@ function main(ntr::Integer = 12)
                     @warn "above the truth" cs.name R z = zs[i] lo = lo[i] tru = tru[i])
                 lo[i] > 0 && abs(zs[i]) >= R && (worst = min(worst, lo[i] / tru[i]))
             end
-            cv = RP.cover_tri(ts; nθ = 32, η = 0.5, maxpoints = 1500)
+            cv = RP.cover_tri(ts; η = 0.5, samples = 64, maxarcs = 20_000)
             dense = count(z -> abs(z) > R, ev)
             if cv.ok
                 ncount += 1
