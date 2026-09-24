@@ -423,7 +423,7 @@ applications of B; each column is renormalised at every step and the logarithms 
 Used to choose the order of the certified sweep and the power-of-two scale; it certifies nothing.
 """
 function estimate_orders(op::LinOp, Q::AbstractMatrix, mmax::Integer; nsamples::Integer = 8,
-        rng = Random.MersenneTwister(20260911))
+        nwarm::Integer = 8, rng = Random.MersenneTwister(20260911))
     n = op.n
     k = size(Q, 2)
     T = promote_type(op.T, eltype(Q)) <: Complex ? ComplexF64 : Float64
@@ -431,30 +431,37 @@ function estimate_orders(op::LinOp, Q::AbstractMatrix, mmax::Integer; nsamples::
     s = Int(nsamples)
     X = T <: Complex ? (randn(rng, n, s) .+ im .* randn(rng, n, s)) ./ sqrt(2) :
         randn(rng, n, s)
-    X = Matrix{T}(X)
+    X = Matrix{T}(Matrix(qr(Matrix{T}(X)).Q))
     Y = similar(X)
     T1 = similar(X)
     T2 = similar(X)
     S = similar(X)
     Tk = zeros(T, k, s)
-    logn = [log(norm(X[:, c])) for c in 1:s]
-    for c in 1:s
-        X[:, c] ./= norm(X[:, c])
+    # A few applications before anything is recorded, so that the block has turned towards the
+    # dominant singular directions: from random starts the first estimate is otherwise well below
+    # the norm, and the order and scale chosen from it are poor.
+    for w in 1:nwarm
+        _applyB!(Y, X, op, Qm, 1.0, T1, T2, Tk, S, iseven(w))
+        σw = opnorm(Y)
+        (isfinite(σw) && σw > 0) || break
+        Y ./= σw
+        X .= Matrix(qr(Y).Q)
     end
     v = zeros(mmax)
+    logscale = 0.0
     for t in 1:mmax
         _applyB!(Y, X, op, Qm, 1.0, T1, T2, Tk, S, iseven(t))
-        lt = zeros(s)
-        for c in 1:s
-            nc = norm(Y[:, c])
-            logn[c] += nc > 0 ? log(nc) : -Inf
-            nc > 0 && (Y[:, c] ./= nc)
-            lt[c] = 2 * logn[c]
+        # ‖B^t‖ is estimated by ‖B^t X‖ for X orthonormal, which is the largest singular value of
+        # an n × s block and a lower bound converging upward as the block aligns with the dominant
+        # singular directions. The running scale keeps it away from overflow.
+        σ = opnorm(Y)
+        if !(isfinite(σ) && σ > 0)
+            v[t] = 0.0
+            break
         end
-        # (1/s) Σ exp(lt) computed stably
-        mx = maximum(lt)
-        τ = isfinite(mx) ? mx + log(sum(exp.(lt .- mx)) / s) : -Inf
-        v[t] = exp(τ / (2t))
+        logscale += log(σ)
+        v[t] = exp(logscale / t)
+        Y ./= σ
         X, Y = Y, X
     end
     return v
@@ -524,13 +531,15 @@ function certify_far_block(op::LinOp, Q::AbstractMatrix, fd::FrameData;
     if order isa Integer
         m = Int(order)
     else
-        vmin = minimum(est)
-        m = findfirst(v -> v <= (1 + order_tol) * vmin, est)
-        if target !== nothing
-            mt = findfirst(v -> v * (1 + order_tol) < target, est)
-            mt === nothing || (m = min(m, mt))
-        end
-        m === nothing && (m = mmax)
+        # The order is taken as high as allowed, and the estimate decides only the scale. Neither
+        # of the two rules tried before survives measurement: stopping when the estimate clears the
+        # target, or when it stops improving, both choose order one on grcar500, where the sweep
+        # certifies 16.46 for a far block of norm 2.222 while order 12 certifies 3.353. The
+        # looseness at low order is internal to the sweep's rounding bound and has nothing to do
+        # with how the powers decay, which for that block is not at all, its spectral radius being
+        # 2.2001 against a norm of 2.222. The cost is what buys the improvement: on grcar500 the
+        # whole range costs 0.01 s, on rdb2048 at n = 2048 it is 0.11 s against 0.01 s at order one.
+        m = mmax
     end
     vref = minimum(est[1:m])
     c = (isfinite(vref) && vref > 0) ? 2.0^(-exponent(vref)) : 1.0
