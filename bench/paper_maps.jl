@@ -53,6 +53,10 @@ pick(rows, name) = only(filter(r -> r["op"] == name && r["target"] == "10", rows
 const CONFIGS = Dict(
     "rdb200" => (; ng = 340, levels = [1e-3, 1e-2, 1e-1], discs = true,
         zoom = (-34.4, -28.0, -3.2, 3.2), ngz = 320),
+    "airy200" => (; ng = 300, levels = [1e-3, 1e-2, 1e-1], discs = true, zoom = nothing,
+        ngz = 0),
+    "davies200" => (; ng = 300, levels = [1e-3, 1e-2, 1e-1], discs = true, zoom = nothing,
+        ngz = 0),
     "grcar500" => (; ng = 280, levels = [1e-3, 1e-2, 1e-1], discs = false, zoom = nothing,
         ngz = 0),
     "kahan500" => (; ng = 240, levels = [1e-4, 1e-3, 1e-2], discs = false, zoom = nothing,
@@ -64,7 +68,14 @@ function build(name)
     # the radius and the frame are the planner's, not a radius read off a dense eigendecomposition
     t_plan = @elapsed (pl = plan_split(op, o.matvec, o.adjoint; mmax = 12, nR = 6,
         amargin = 1.5, Leig = 200))
-    pl.best === nothing && error("$name: the planner found no feasible point")
+    if pl.best === nothing
+        @printf("%s: the planner found no feasible point over %d grid points, %d matvecs, %.1f s",
+            name, length(pl.rows), pl.nmatvec, t_plan)
+        isempty(pl.predicted) ? println() :
+            @printf("; the grid says dim Q ≈ %.0f would be needed at R = %.6g\n",
+                pl.predicted[1].dimQ_needed, pl.predicted[1].R)
+        return nothing
+    end
     b = pl.best
     R = b.R
     @printf("%s: planner %d grid points, %d feasible, %d matvecs, %.1f s -> R = %.6g, ks = %d, dim Q = %d, %d outside\n",
@@ -157,6 +168,7 @@ end
 function run_one(name)
     cfg = CONFIGS[name]
     b = build(name)
+    b === nothing && continue
     g = gridmap(b; cfg.ng)
     sc = b.sc
     @printf("%s: n = %d, dim Q = %d, R = %.6g, ḡ = %.6g, γ1γ2 = %.4g, frame %.1f s, split %.1f s\n",
@@ -284,7 +296,9 @@ function draw(r)
         join((@sprintf("%.4g", l) for l in levs), ", "), ")")
 end
 
-names = isempty(ARGS) ? ["rdb200", "grcar500", "kahan500"] : split(ARGS[1], ',')
+# the operators the planner finds a point for; grcar500 and kahan500 are in CONFIGS but declined,
+# and a map of a radius the method refuses to choose would say nothing
+names = isempty(ARGS) ? ["rdb200", "airy200", "davies200"] : split(ARGS[1], ',')
 redraw = length(ARGS) >= 2 && ARGS[2] == "redraw"
 @info "threads" julia = Threads.nthreads() blas = BLAS.get_num_threads()
 for nm in names

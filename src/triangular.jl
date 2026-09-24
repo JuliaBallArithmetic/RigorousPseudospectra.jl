@@ -362,9 +362,12 @@ function certify_exterior_tri(ts::TriangularSplit, gbar::Real, γ1::Real, γ2::R
     discs = NamedTuple[]
     # the region condition of prop:count, tested against the polygon and not the circle
     region_ok = chk.ok && chk.rmin > Float64(gbar)
-    # an eigenvalue could sit between the polygon and the circle, outside the contour certified and
-    # inside the circle the count is taken over, unless the floor exceeds the sagitta
-    count_ok = chk.ok && chk.floor > chk.sagitta
+    # The contour certified is the polygon and the count is taken over the circle, so the two agree
+    # unless an eigenvalue lies between them, that is within the sagitta of the radius. Since R is
+    # placed in a gap between moduli that is what has to be checked, and it is far weaker than
+    # asking the floor to exceed the sagitta.
+    count_ok = chk.ok &&
+               !any(z -> abs(abs(z) - R) <= chk.sagitta, diag(ts.T))
     (chk.ok && region_ok && count_ok) ||
         return (; ok = false, R, count = -1, exterior = chk, discs, region_ok, count_ok)
     λ = diag(ts.T)
@@ -385,7 +388,8 @@ function certify_exterior_tri(ts::TriangularSplit, gbar::Real, γ1::Real, γ2::R
         if rmin < rmax
             for r in exp.(range(log(rmin), log(rmax * (1 - 1e-6)); length = nradii))
                 ck = _cover_kernel(floorfun, c, r; η, samples, maxarcs)
-                if ck.ok && subd(absd(c), r) > Float64(gbar) && ck.floor > ck.sagitta
+                if ck.ok && subd(absd(c), r) > Float64(gbar) &&
+                   !any(z -> abs(abs(z - c) - r) <= ck.sagitta, diag(ts.T))
                     push!(discs, (; center = c, radius = r,
                         count = count(z -> abs(z - c) < r, λ), check = ck))
                     found = true
@@ -413,9 +417,10 @@ the deviation is the sagitta `R(1 − cos(π/samples))`.
 is the other endpoint, so the chord is the right allowance and an accepted arc carries
 `σ ≥ σ_a − ℓ ≥ (1 − η)σ_a`. The floor returned is `(1 − η)` times the least bound seen.
 
-The count is that of the compression outside `R`, and it is reported only when the floor exceeds
-the sagitta: an eigenvalue could otherwise sit between the polygon and the circle, outside the
-contour that was certified and inside the circle the count is taken over.
+The count is that of the compression outside `R`, withheld only when an eigenvalue of the Schur
+factor lies within the sagitta of the radius: such a one could sit between the polygon and the
+circle, outside the contour certified and inside the circle the count is taken over. Since `R` is
+placed in a gap between moduli this rarely bites.
 
 Returns `(; ok, floor, count, npoints, nbisect, sagitta, reason, time)`.
 """
@@ -441,8 +446,9 @@ function cover_tri(ts::TriangularSplit, R::Real = ts.R; η::Real = 0.5,
     end
     σmin = minimum(Float64(v[1].c) - Float64(v[1].r) for v in values(cache))
     fl = muld(subd(1.0, Float64(η)), σmin)
-    return (; ok = true, floor = fl, count = fl > sag ? count_tri(ts) : -1, npoints,
+    near = any(z -> abs(abs(z) - R) <= sag, diag(ts.T))
+    return (; ok = true, floor = fl, count = near ? -1 : count_tri(ts), npoints,
         nbisect = res.processed, sagitta = sag,
-        reason = fl > sag ? :complete : :floor_below_sagitta, time = time() - t0,
+        reason = near ? :eigenvalue_within_the_sagitta : :complete, time = time() - t0,
         zfail = ComplexF64(NaN))
 end
