@@ -168,7 +168,7 @@ end
 function run_one(name)
     cfg = CONFIGS[name]
     b = build(name)
-    b === nothing && continue
+    b === nothing && return nothing
     g = gridmap(b; cfg.ng)
     sc = b.sc
     @printf("%s: n = %d, dim Q = %d, R = %.6g, ḡ = %.6g, γ1γ2 = %.4g, frame %.1f s, split %.1f s\n",

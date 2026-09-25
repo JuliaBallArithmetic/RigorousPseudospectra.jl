@@ -66,7 +66,7 @@ le(a, b) = a <= b * (1 + 1e-10) + 1e-300
 
 function main(ntr::Integer = 12)
     Random.seed!(20260915)
-    nsig = 0; nbad = 0; ncount = 0; nbadcount = 0; ncase = 0; ndecl = 0
+    nsig = 0; nbad = 0; ncount = 0; nbadcount = 0; ncase = 0; ndecl = 0; nheld = 0
     worst = Inf
     rows = NamedTuple[]
     for cs in cases(ntr)
@@ -99,12 +99,18 @@ function main(ntr::Integer = 12)
                     @warn "above the truth" cs.name R z = zs[i] lo = lo[i] tru = tru[i])
                 lo[i] > 0 && abs(zs[i]) >= R && (worst = min(worst, lo[i] / tru[i]))
             end
-            cv = RP.cover_tri(ts; η = 0.5, samples = 64, maxarcs = 20_000)
+            # 256 samples put the sagitta at 7.5e-5·R, below the gaps this gallery places its
+            # radii in; at 64 it was 1.2e-3·R and the count was withheld on five cases
+            cv = RP.cover_tri(ts; η = 0.5, samples = 256, maxarcs = 50_000)
             dense = count(z -> abs(z) > R, ev)
             if cv.ok
-                ncount += 1
-                cv.count == dense || (nbadcount += 1;
-                    @warn "count mismatch" cs.name R cv.count dense)
+                if cv.count < 0
+                    nheld += 1                      # withheld, not wrong: see cover_tri
+                else
+                    ncount += 1
+                    cv.count == dense || (nbadcount += 1;
+                        @warn "count mismatch" cs.name R cv.count dense)
+                end
             end
             @printf("%-14s R = %10.4g : cut %4d, γ₁ = %.2e, ḡ₂₂ = %.2e, floor %.3e, %s (dense %d), %6.2f ms/z (svd %6.2f), setup %.1f s\n",
                 cs.name, R, ts.c, ts.γ1, ts.gbar, cv.ok ? cv.floor : 0.0,
@@ -117,7 +123,8 @@ function main(ntr::Integer = 12)
     end
     @printf("\n%d cases, %d declined; %d σ comparisons, %d above the truth; smallest ratio to truth %.3e\n",
         ncase, ndecl, nsig, nbad, worst)
-    @printf("%d covers certified, %d counts wrong\n", ncount, nbadcount)
+    @printf("%d covers certified, %d counts wrong, %d counts withheld (an eigenvalue within the sagitta of R)\n",
+        ncount, nbadcount, nheld)
     out = joinpath(homedir(), "ResearchData", "KrylovPseudospectra_Data", "pseudospectra",
         "tri_gallery.$(gethostname()).jls")
     mkpath(dirname(out)); serialize(out, rows)
