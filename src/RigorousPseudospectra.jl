@@ -67,7 +67,7 @@ export miyajima_rump, MiyajimaRump, EigCluster
 export ModulusSplit, split_compression, sigma_split_lo, sigma_J_lo, split_components
 export split_sigma_blocks_lo, split_block_discs, split_reason
 export DeepSplit, deep_split, deep_certificate, deep_reason, merged_far_bounds
-export SplitPlan, plan_split, plan_table, candidate_radii
+export SplitPlan, plan_split, plan_table, candidate_radii, reach_table, reach_report
 export TriangularSplit, triangular_split, sigma_tri_lo, count_tri, cover_tri, certify_exterior_tri
 export radius_sweep, radius_table, sigma11_estimate, plan_radii
 # §3.3, §4
