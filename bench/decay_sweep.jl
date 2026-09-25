@@ -9,6 +9,13 @@
 # ten-eigenvalue target, one certified split with no peeling, and the four numbers it returns.
 # Nothing here uses the triangular route; ḡ, ā, γ1 and γ2 are properties of the frame alone.
 #
+# Beside each certified ḡ the run records the oracle floor σ_{2k+1}(A), from a dense SVD where the
+# size allows. That floor is what no frame of k columns can go below whatever the sweep does, so
+# the pair says two different things: the floor is whether a radius is reachable at all, and the
+# gap between ḡ and the floor is what the certificate gives away. On olm1000 the floor first
+# crosses the radius at index 394, so k ≥ 197 is needed and no order helps below that; at ks = 400
+# the certificate goes through with ḡ = 8798 against a true far block of 8659.
+#
 #   OPENBLAS_NUM_THREADS=4 julia --project=. -t 16 bench/decay_sweep.jl [op ...]
 #
 # Output: ~/ResearchData/KrylovPseudospectra_Data/pseudospectra/decay_sweep.<host>.{csv,jls}
@@ -24,8 +31,9 @@ BLAS.set_num_threads(parse(Int, get(ENV, "OPENBLAS_NUM_THREADS", "4")))
 const OUT = joinpath(homedir(), "ResearchData", "KrylovPseudospectra_Data", "pseudospectra")
 mkpath(OUT)
 const HOST = gethostname()
-const KSS = (10, 20, 40, 80, 160, 320)
+const KSS = (10, 20, 40, 80, 160, 320, 480)
 const NDENSE_EIG = 6000
+const NDENSE_SVD = 3000
 
 const ORDER = ["rdb200", "rdb800l", "rdb2048", "rdb5000", "grcar500", "convdiff_cheb200",
     "davies200", "kahan500", "airy200", "orrsom200", "landau400", "hatano2000", "qh1484",
@@ -51,6 +59,8 @@ function main(names)
         a = sort(abs.(λ); rev = true)
         length(a) > 11 || continue
         R = sqrt(a[10] * a[11])
+        # the oracle floor, σ_j(A), dense where the size allows
+        sv = (o.A !== nothing && o.n <= NDENSE_SVD) ? svdvals(Matrix(o.A)) : Float64[]
         op = o.A === nothing ? RP.LinOp(o.matvec, o.adjoint, o.n; epsA = o.epsA) : RP.LinOp(o.A)
         println("\n===== ", o.name, "  n = ", o.n, "  R = ", R, "  ",
             Dates.format(now(), "HH:MM:SS"))
@@ -62,12 +72,19 @@ function main(names)
                     Lsv = min(o.n, 2ks + 60), T = op.T)
                 sc = RP.certify_split(op, Q; target = R, compression = :none)
             end
-            @printf("  ks %4d  dim Q %5d  ḡ = %.6e  ā = %.6e  ḡ/ā = %.4e  γ1 = %.3e  γ2 = %.3e  (%.1f s)\n",
-                ks, sc.k, sc.gbar, sc.abar, sc.gbar / sc.abar, sc.γ1, sc.γ2, t)
+            jf0 = 2 * sc.k + 1
+            fo = (!isempty(sv) && jf0 <= length(sv)) ? sv[jf0] : NaN
+            @printf("  ks %4d  dim Q %5d  ḡ = %.6e  floor σ_{2k+1} = %.6e  ḡ/floor = %.4g  ā = %.6e  order %3d  (%.1f s)\n",
+                ks, sc.k, sc.gbar, fo, sc.gbar / fo, sc.abar,
+                sc.far === nothing ? -1 : sc.far.m, t)
             flush(stdout)
+            jf = 2 * sc.k + 1
+            floor_oracle = (!isempty(sv) && jf <= length(sv)) ? sv[jf] : NaN
             push!(rows, (; op = o.name, o.n, ks, dimQ = sc.k, R, gbar = sc.gbar, abar = sc.abar,
-                ratio = sc.gbar / sc.abar, γ1 = sc.γ1, γ2 = sc.γ2, α = sc.α,
-                lam5 = a[5], lam10 = a[10], lam1 = a[1], time = t, host = HOST))
+                ratio = sc.gbar / sc.abar, floor_oracle, γ1 = sc.γ1, γ2 = sc.γ2, α = sc.α,
+                lam1 = a[1], lam2 = a[2], lam5 = a[5], lam10 = a[10],
+                lam20 = length(a) >= 20 ? a[20] : NaN,
+                order = sc.far === nothing ? -1 : sc.far.m, time = t, host = HOST))
         end
     end
     isempty(rows) && return
