@@ -65,12 +65,15 @@ for (i, op) in enumerate(ops)
         scatter!(ax, first.(fo), max.(last.(fo), 1e-18); color = FLOOR, marker = :rect,
             markersize = 6)
     end
-    for (lam, lab) in ((rs[1].lam2, "2"), (rs[1].lam5, "5"), (rs[1].lam10, "10"),
-        (rs[1].lam20, "20"))
+    # the four moduli are often within a few per cent of each other, and a label at a common x
+    # then sits on top of its neighbours; each gets its own abscissa instead
+    lo, hi = log10(x[1]), log10(x[end])
+    for (j, (lam, lab)) in enumerate(((rs[1].lam2, "2"), (rs[1].lam5, "5"), (rs[1].lam10, "10"),
+        (rs[1].lam20, "20")))
         isfinite(lam) || continue
         hlines!(ax, [lam / nA]; color = (INK, 0.35), linewidth = 0.8, linestyle = :dash)
-        text!(ax, x[end], lam / nA; text = lab, align = (:right, :bottom), fontsize = 8,
-            color = (INK, 0.55))
+        text!(ax, 10^(lo + (0.30 + 0.22 * (j - 1)) * (hi - lo)), lam / nA; text = lab,
+            align = (:center, :bottom), fontsize = 8, color = (INK, 0.55))
     end
 end
 

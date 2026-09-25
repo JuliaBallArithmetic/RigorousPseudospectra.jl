@@ -196,16 +196,40 @@ function run_one(name)
     cnt = -1
     if cfg.discs
         t = @elapsed (ext = certify_exterior_tri(b.ts, sc.gbar, sc.γ1, sc.γ2; R = b.R,
-            σ22lo = b.σ22lo, nθ = 64, nradii = 10, maxdepth = 6))
+            σ22lo = b.σ22lo, samples = 256, nradii = 10))
         cnt = ext.count
         good = [d for d in ext.discs if isfinite(d.radius)]
         tw = @elapsed (wide = [widest_disc(b, b.R, good, i) for i in eachindex(good)])
         discs = [(; d.center, d.radius, rmax = w, d.count) for (d, w) in zip(good, wide)]
         @printf("   cor:agree: count %d, %d discs, all closed %s (%.1f s + %.1f s for the widest)\n",
             ext.count, length(discs), ext.ok, t, tw)
+        # which of the three gates withheld the count: the cover itself, the region condition
+        # r_min > ḡ of prop:count, or an eigenvalue within the sagitta of R
+        e = ext.exterior
+        @printf("      cover %s over %d points, %d bisections, floor %.4e, sagitta %.3e, r_min %.6f; region (r_min > ḡ = %.6g) %s; no eigenvalue within the sagitta of R %s\n",
+            e.ok, e.npoints, e.nbisect, e.floor, e.sagitta, e.rmin, Float64(sc.gbar),
+            ext.region_ok, ext.count_ok)
+        if !ext.count_ok
+            near = sort([z for z in diag(b.ts.T) if abs(abs(z) - b.R) <= 10 * e.sagitta];
+                by = z -> abs(abs(z) - b.R))
+            for z in near[1:min(end, 4)]
+                @printf("      eigenvalue %+.10f %+.10fi at |z| = %.10f, |z| - R = %+.4e\n",
+                    real(z), imag(z), abs(z), abs(z) - b.R)
+            end
+        end
         for d in discs
             @printf("      centre %+.10f %+.10fi  r_min %.4e  r_max %.4e  count %d\n",
                 real(d.center), imag(d.center), d.radius, d.rmax, d.count)
+        end
+        # a centre at which no radius on the ladder closed: `discs` keeps only the ones that did,
+        # so without this the log shows an empty list and not the centres it failed at
+        for d in ext.discs
+            isfinite(d.radius) && continue
+            c = d.center
+            rmax = min(abs(c) - b.R,
+                minimum([abs(c - e.center) / 2 for e in ext.discs if e.center != c]; init = Inf))
+            @printf("      centre %+.10f %+.10fi at |z| = %.6g: no radius closed, ladder up to r_max = %.4e (|c| − R = %.4e, ḡ = %.6g)\n",
+                real(c), imag(c), abs(c), rmax, abs(c) - b.R, Float64(sc.gbar))
         end
     end
 
