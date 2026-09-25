@@ -498,6 +498,7 @@ struct FarBlockCertificate
     epsB::Float64
     etaB::Float64
     epsP::Float64
+    gbars_power::Vector{Float64}
     sums::SweepSums
     nmatvec::Int
     time_estimate::Float64
@@ -509,17 +510,18 @@ end
     certify_far_block(op, Q, fd; order = :auto, order_max = 12, order_tol = 0.05, target = nothing,
                       nsamples = 8, blocksize, nthreads) -> FarBlockCertificate
 
-Algorithm alg:fpsweep. The order `m` is `order` if an integer, else chosen from
-[`estimate_orders`](@ref): the least `t` whose estimate is within a factor `1 + order_tol` of the
-least estimate up to `order_max`, or, when `target` is given, the least `t` whose estimate is below
-`target/(1 + order_tol)` (falling back to the first rule). The operator is scaled by the power of two
+Algorithm alg:fpsweep. The order `m` is `order` if an integer, else predicted from
+[`estimate_orders`](@ref): the sweep measures a Frobenius norm over a block of rank at most
+`n − k` and tests it against `g^{2t}`, so the certified bound behaves like
+`v_t·(n − k)^{1/2t}`, and `m` is the least order whose prediction clears `target`, or, with no
+target, the least at which the prediction stops improving. The operator is scaled by the power of two
 `c = 2^{-e}` that brings the least estimate into `[1, 2)` (rem:impl). One sweep of order `m`
 ([`trace_sweep`](@ref)); then, for every `t ≤ m` and for the interpolation half, the least `ḡ`
 passing (i) with `ā(ḡ)` the least number passing (ii) (bisection, at no further matvec). The frame
 data `fd` supplies α (for ε_P) and the affine isometry bounds.
 """
 function certify_far_block(op::LinOp, Q::AbstractMatrix, fd::FrameData;
-        order = :auto, order_max::Integer = 12, order_tol::Real = 0.05, target = nothing,
+        order = :auto, order_max::Integer = 64, order_tol::Real = 0.05, target = nothing,
         nsamples::Integer = 8, blocksize = nothing, nthreads::Integer = Threads.nthreads(),
         rng = Random.MersenneTwister(20260911))
     n, k = size(Q)
@@ -531,15 +533,32 @@ function certify_far_block(op::LinOp, Q::AbstractMatrix, fd::FrameData;
     if order isa Integer
         m = Int(order)
     else
-        # The order is taken as high as allowed, and the estimate decides only the scale. Neither
-        # of the two rules tried before survives measurement: stopping when the estimate clears the
-        # target, or when it stops improving, both choose order one on grcar500, where the sweep
-        # certifies 16.46 for a far block of norm 2.222 while order 12 certifies 3.353. The
-        # looseness at low order is internal to the sweep's rounding bound and has nothing to do
-        # with how the powers decay, which for that block is not at all, its spectral radius being
-        # 2.2001 against a norm of 2.222. The cost is what buys the improvement: on grcar500 the
-        # whole range costs 0.01 s, on rdb2048 at n = 2048 it is 0.11 s against 0.01 s at order one.
-        m = mmax
+        # The order the target needs, predicted before the sweep is run.
+        #
+        # What the sweep measures is a Frobenius norm, over a block of rank at most n − k, and the
+        # test compares it against g^{2t}, so the certified bound carries that factor to the power
+        # 1/2t:
+        #
+        #     g(t) ≈ v_t · (n − k)^{1/2t},
+        #
+        # with v_t the estimate of ‖B^t‖^{1/t}. On grcar500, rank 270: predicted looseness 16.4,
+        # 1.26, 1.12, 1.06 at t = 1, 12, 24, 48 against measured 7.4, 1.09, 1.02, 1.005.
+        #
+        # So the smallest order that can clear the target is the smallest t with g(t) < target, and
+        # when no t up to `order_max` does, no sweep of any order on this ladder will certify the
+        # far block below the target and there is no point running one. The order is otherwise
+        # where the prediction stops improving.
+        rk = max(n - k, 1)
+        gpred = [est[t] * rk^(1 / (2t)) for t in 1:mmax]
+        m = nothing
+        if target !== nothing
+            m = findfirst(g -> g * (1 + order_tol) < Float64(target), gpred)
+        end
+        if m === nothing
+            vmin = minimum(gpred)
+            m = findfirst(g -> g <= (1 + order_tol) * vmin, gpred)
+            m === nothing && (m = mmax)
+        end
     end
     vref = minimum(est[1:m])
     c = (isfinite(vref) && vref > 0) ? 2.0^(-exponent(vref)) : 1.0
@@ -570,13 +589,26 @@ function certify_far_block(op::LinOp, Q::AbstractMatrix, fd::FrameData;
     tc = time() - tc
     if isempty(cands)
         return FarBlockCertificate(false, Inf, Inf, m, :none, 0, gt ./ c, at ./ c, NaN, NaN,
-            trfp ./ c, ipfp / c, est, c, NaN, NaN, εP, S, S.nmatvec + m * nsamples, te, S.time,
-            tc)
+            trfp ./ c, ipfp / c, est, c, NaN, NaN, εP, Float64[], S,
+            S.nmatvec + m * nsamples, te, S.time, tc)
     end
     g, a, which, t = cands[argmin(first.(cands))]
     εB, ηB = _consts(D, a, g)
     unscale(x) = isfinite(x) ? divu(x, c) : x
+    # The vector eq:farpower consumes, from the same sweep and at no further cost. `F_up` bounds
+    # Σ_i‖B^j e_i‖² with the rounding allowances of the certified pair, so its square root bounds
+    # ‖B^j‖_F and hence ‖B^j‖. Without it farpower_lo has nothing to work with and σ22 is always
+    # the order-one form |z| − ḡ, which is the weaker of the two whenever the far block is
+    # non-normal enough for its powers to decay.
+    gp = Float64[]
+    if S.finite
+        for j in 1:m
+            fj = F_up(S, j, εB, ηB, g)
+            (isfinite(fj) && fj >= 0) || break
+            push!(gp, divu(sqrtu(fj), powd(c, j)))
+        end
+    end
     return FarBlockCertificate(true, unscale(g), unscale(a), m, which, t, unscale.(gt),
         unscale.(at), unscale(gi), unscale(ai), trfp ./ c, ipfp / c, est, c, εB, divu(ηB, c),
-        εP, S, S.nmatvec + m * nsamples, te, S.time, tc)
+        εP, gp, S, S.nmatvec + m * nsamples, te, S.time, tc)
 end
