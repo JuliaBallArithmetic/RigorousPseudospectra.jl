@@ -394,69 +394,41 @@ end
 # ------------------------------------------------------------------------------------------------
 
 """
-    reach_table(op, Amul, Aadj; budget = 40_000, nR = 12, Leig = 200, T = nothing)
-        -> Vector{NamedTuple}
+    reach_table(pl::SplitPlan) -> Vector{NamedTuple}
+    reach_table(op, Amul, Aadj; kwargs...) -> Vector{NamedTuple}
 
 Which radii a frame can reach, and at what size, read before any certificate is attempted.
 
-Proposition prop:frame gives `ḡ ≥ σ_{2k+1}(A)` for every frame of `k` columns, so a radius below
-`σ_{2k+1}` is out of reach of that frame whatever the sweep afterwards does, and the least frame
-that can reach `R` is `k(R) = min{k : σ_{2k+1} < R}`. The singular values come from one
-Golub-Kahan-Lanczos, doubled until it passes the deepest radius asked about or until `budget`
-applications of `A` and `A*` are spent; the radii are the gaps between consecutive moduli of the
-Ritz values, where a count is well defined.
+This is a reading of [`plan_split`](@ref)'s own grid and computes nothing new: that grid already
+carries, for every `(R, ks)`, the frame it assembles from the shared pool, its `dim Q`, and the
+estimate of `‖G22‖` from the subspace iteration of [`estimate_orders`](@ref). The certificate has
+to put that quantity below the radius, so the table reports the least frame on the grid whose
+estimate clears each radius.
 
-Each row carries the radius, the number of Ritz values outside it, the frame size and the
-resulting `dim Q ≈ 2k`, and whether that frame is smaller than the operator, since a frame of the
-size of the matrix is no longer a reduction and a dense factorisation is the better tool.
-
-**The frame size is a lower bound, never a sufficient one.** A length-`L` Lanczos gives
-`σ_j^{(L)} ≤ σ_j(A)` by interlacing, so its estimates lie below the truth and the index at which
-they cross a radius is at or before the true index. Measured on 2026-09-25 against a dense SVD:
-exact on `rdb200`, 7 against 22 on `grcar500`, 60 against 197 on `olm1000`. What the table says is
-that no frame smaller than this can reach that radius; whether a frame of that size does is for the
-certificate to answer.
+Nothing here is a bound. The estimate is a subspace iteration, measured a few per cent low; the
+certificate afterwards is what decides. A radius no frame on the grid clears is reported with
+`ks = -1`, and `plan_split`'s `predicted` field extrapolates the `dim Q` it would take.
 """
-function reach_table(op::LinOp, Amul, Aadj; budget::Integer = 40_000, nR::Integer = 12,
-        Leig::Integer = 200, T = nothing)
-    n = op.n
-    TT = T === nothing ? op.T : T
-    nmv = 0
-    V, H = arnoldi(Amul, n, min(Leig, n - 1); T = TT)
-    nmv += size(H, 2)
-    Lh = size(H, 2)
-    λ = eigen(H[1:Lh, 1:Lh]).values
-    a = sort(abs.(λ); rev = true)
-    gaps = Float64[]
-    for j in 1:(length(a) - 1)
-        a[j] > a[j + 1] * (1 + 1e-9) && push!(gaps, sqrt(a[j] * a[j + 1]))
-    end
-    isempty(gaps) && return NamedTuple[]
-    nR > 0 && length(gaps) > nR && (gaps = gaps[1:nR])
-    target = minimum(gaps)
-    # A length-L run gives σ_j^{(L)} ≤ σ_j(A) by interlacing, so the index at which the estimates
-    # cross a radius is at or before the true one and the frame size that comes out is a lower
-    # bound. It is a bad one when the crossing sits at the tail of what was computed, where the
-    # estimates are least converged, so the run is doubled while that is the case.
-    L = min(n, 256)
-    local sv
-    while true
-        _, _, σ = gkl(Amul, Aadj, n, L; T = TT)
-        nmv += 2L
-        sv = Float64[abs(x) for x in σ]
-        j = findfirst(x -> x < target, sv)
-        resolved = j !== nothing && j < 0.8 * length(sv)
-        (resolved || L >= n || 2L > Int(budget) - nmv) && break
-        L = min(n, 2L)
-    end
+function reach_table(pl::SplitPlan)
     out = NamedTuple[]
-    for R in gaps
-        j = findfirst(x -> x < R, sv)
-        k = j === nothing ? -1 : max(cld(j - 1, 2), 1)
-        push!(out, (; R, nout = count(x -> x > R, a), k, dimQ = k < 0 ? -1 : 2k,
-            reachable = k > 0 && 2k < n, seen = length(sv), nmatvec = nmv))
+    for R in pl.Rs
+        sub = sort([r for r in pl.rows if r.R == R]; by = r -> r.dimQ)
+        isempty(sub) && continue
+        i = findfirst(r -> r.gbar < R, sub)
+        nz = sub[1].nout
+        push!(out, (; R, nout = nz,
+            ks = i === nothing ? -1 : sub[i].ks,
+            dimQ = i === nothing ? -1 : sub[i].dimQ,
+            ghat = i === nothing ? minimum(r.gbar for r in sub) : sub[i].gbar,
+            gate = i === nothing ? false : sub[i].gate,
+            feasible = any(r -> r.assembly, sub),
+            nmatvec = pl.nmatvec))
     end
     return sort(out; by = r -> -r.R)
+end
+
+function reach_table(op::LinOp, Amul, Aadj; kwargs...)
+    return reach_table(plan_split(op, Amul, Aadj; kwargs...))
 end
 
 reach_table(A::AbstractMatrix; kwargs...) =
@@ -469,12 +441,13 @@ Print [`reach_table`](@ref): radius, eigenvalues outside it, the least frame tha
 """
 function reach_report(rows; io = stdout)
     isempty(rows) && (println(io, "no radius: the Ritz moduli show no gap"); return nothing)
-    println(io, "  radius        outside   k at least   dim Q    possible")
+    println(io, "  radius        outside     ks    dim Q      ĝ     gate   feasible")
     for r in rows
-        println(io, rpad(round(r.R; sigdigits = 6), 14), lpad(r.nout, 7), lpad(r.k, 13),
-            lpad(r.dimQ, 8), lpad(r.reachable ? "yes" : "no", 12))
+        println(io, rpad(round(r.R; sigdigits = 6), 14), lpad(r.nout, 7), lpad(r.ks, 7),
+            lpad(r.dimQ, 9), lpad(round(r.ghat; sigdigits = 4), 9),
+            lpad(r.gate ? "yes" : "no", 7), lpad(r.feasible ? "yes" : "no", 11))
     end
-    println(io, "  (", rows[1].seen, " singular values seen, ", rows[1].nmatvec,
-        " matvecs; k is a lower bound, the estimates lie below the true singular values)")
+    println(io, "  (", rows[1].nmatvec,
+        " matvecs; ĝ is a subspace-iteration estimate of ‖G22‖, not a bound)")
     return nothing
 end
