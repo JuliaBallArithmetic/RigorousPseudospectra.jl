@@ -108,6 +108,10 @@ struct SweepSums
     Ninf::Float64
     N1fp::Float64
     Ninffp::Float64
+    N1s::Vector{Float64}
+    Ninfs::Vector{Float64}
+    N1fps::Vector{Float64}
+    Ninffps::Vector{Float64}
     finite::Bool
     scale::Float64
     nmatvec::Int
@@ -188,9 +192,9 @@ function trace_sweep(op::LinOp, Q::AbstractMatrix, m::Integer; scale::Real = 1.0
             Γ = zeros(m + 1, m + 1)
             Σν = zeros(m + 1)
             fp = zeros(m)
-            acc = zeros(n)
-            N1 = 0.0
-            N1fp = 0.0
+            acc = zeros(n, m)
+            N1 = zeros(m)
+            N1fp = zeros(m)
             fin = true
             ν = zeros(b, m + 1)
             nmv = 0
@@ -225,12 +229,14 @@ function trace_sweep(op::LinOp, Q::AbstractMatrix, m::Integer; scale::Real = 1.0
                         fin &= isfinite(ss)
                         ν[c, s + 1] = sqrtu(addu(divu(ss, onemsq), ηsq))
                         fp[s] += ss
-                        if s == 1
-                            N1 = max(N1, addu(divu(s1, oneml1), ηl1))
-                            N1fp = max(N1fp, s1)
-                            @inbounds for r in 1:n
-                                acc[r] += abs(nxt[r, c])
-                            end
+                        # the ℓ¹ and ℓ∞ sums at every order, not only the first: the column sums
+                        # give ‖B^s‖₁ and the accumulated row sums give ‖B^s‖_∞, whose geometric
+                        # mean bounds ‖B^s‖₂ and is far below the Frobenius norm for a sparse or
+                        # banded block
+                        N1[s] = max(N1[s], addu(divu(s1, oneml1), ηl1))
+                        N1fp[s] = max(N1fp[s], s1)
+                        @inbounds for r in 1:n
+                            acc[r, s] += abs(nxt[r, c])
                         end
                     end
                     cur, nxt = nxt, cur
@@ -252,9 +258,9 @@ function trace_sweep(op::LinOp, Q::AbstractMatrix, m::Integer; scale::Real = 1.0
     Γ = zeros(m + 1, m + 1)
     Σν = zeros(m + 1)
     fp = zeros(m)
-    acc = zeros(n)
-    N1 = 0.0
-    N1fp = 0.0
+    acc = zeros(n, m)
+    N1s = zeros(m)
+    N1fps = zeros(m)
     fin = true
     nmv = 0
     for r in results
@@ -262,16 +268,20 @@ function trace_sweep(op::LinOp, Q::AbstractMatrix, m::Integer; scale::Real = 1.0
         Σν .= addu.(Σν, r.Σν)
         fp .+= r.fp
         acc .+= r.acc
-        N1 = max(N1, r.N1)
-        N1fp = max(N1fp, r.N1fp)
+        N1s .= max.(N1s, r.N1)
+        N1fps .= max.(N1fps, r.N1fp)
         fin &= r.fin
         nmv += r.nmv
     end
-    Ninffp = n == 0 ? 0.0 : maximum(acc)
-    Ninf = addu(divu(Ninffp, oneml1), ηl1)
-    fin &= all(isfinite, Γ) && isfinite(N1) && isfinite(Ninf)
-    return SweepSums(m, n, Γ, Σν, fp, N1, Ninf, N1fp, Ninffp, fin, scale, nmv, nt, b,
-        time() - t0)
+    Ninffps = [n == 0 ? 0.0 : maximum(view(acc, :, s)) for s in 1:m]
+    Ninfs = [addu(divu(x, oneml1), ηl1) for x in Ninffps]
+    N1 = m == 0 ? 0.0 : N1s[1]
+    Ninf = m == 0 ? 0.0 : Ninfs[1]
+    N1fp = m == 0 ? 0.0 : N1fps[1]
+    Ninffp = m == 0 ? 0.0 : Ninffps[1]
+    fin &= all(isfinite, Γ) && all(isfinite, N1s) && all(isfinite, Ninfs)
+    return SweepSums(m, n, Γ, Σν, fp, N1, Ninf, N1fp, Ninffp, N1s, Ninfs, N1fps, Ninffps,
+        fin, scale, nmv, nt, b, time() - t0)
 end
 
 # ------------------------------------------------------------------------------------------------
@@ -303,6 +313,18 @@ function F_up(S::SweepSums, t::Int, εB, ηB, g)
         q = addu(q, addu(mulu(mulu(2.0, h), lin), mulu(Float64(S.n), mulu(h, h))))
     end
     return q
+end
+
+"""
+Upper bound on `‖B^t‖₂²` from the ℓ¹ and ℓ∞ sums at order `t`, by interpolation:
+`‖M‖₂ ≤ sqrt(‖M‖₁‖M‖_∞)`. The rounding allowance is the one `I_up` uses, applied at the order in
+question. Returns `Inf` when the order was not accumulated.
+"""
+function I_up(S::SweepSums, t::Int, εB, ηB)
+    (1 <= t <= length(S.N1s)) || return Inf
+    e = addu(εB, ηB)
+    return mulu(addu(S.N1s[t], mulu(sqrtu(Float64(S.n)), e)),
+        addu(S.Ninfs[t], mulu(Float64(S.n), e)))
 end
 
 "Upper bound of I(g) of eq:FI."
@@ -574,17 +596,23 @@ function certify_far_block(op::LinOp, Q::AbstractMatrix, fd::FrameData;
     D = FPCheckData(S, sc(sa), sc(g1a), sc(g2a), op.epsA, ηA, εP, ηP)
     gt = fill(NaN, m)
     at = fill(NaN, m)
+    git = fill(NaN, m)
+    ait = fill(NaN, m)
     trfp = [S.fp[t] > 0 ? S.fp[t]^(1 / (2t)) : 0.0 for t in 1:m]
     ipfp = sqrt(S.N1fp * S.Ninffp)
     if S.finite
         for t in 1:m
             gt[t], at[t] = least_g(D, (a, g) -> check_iF(D, t, a, g), trfp[t])
+            # the interpolation half at the same order: ‖B^t‖₂ ≤ sqrt(‖B^t‖₁‖B^t‖_∞) < g^t
+            git[t], ait[t] = least_g(D, (a, g) -> I_up(D.S, t, _consts(D, a, g)...) <
+                                                  powd(g, 2t), sqrt(S.N1fps[t] * S.Ninffps[t]))
         end
         gi, ai = least_g(D, (a, g) -> check_iI(D, a, g), ipfp)
     else
         gi, ai = NaN, NaN
     end
     cands = [(gt[t], at[t], :trace, t) for t in 1:m if isfinite(gt[t])]
+    append!(cands, [(git[t], ait[t], :interp, t) for t in 1:m if isfinite(git[t])])
     isfinite(gi) && push!(cands, (gi, ai, :interp, 0))
     tc = time() - tc
     if isempty(cands)
@@ -603,9 +631,11 @@ function certify_far_block(op::LinOp, Q::AbstractMatrix, fd::FrameData;
     gp = Float64[]
     if S.finite
         for j in 1:m
-            fj = F_up(S, j, εB, ηB, g)
-            (isfinite(fj) && fj >= 0) || break
-            push!(gp, divu(sqrtu(fj), powd(c, j)))
+            fj = F_up(S, j, εB, ηB, g)            # Frobenius, loose by up to sqrt(rank)
+            ij = I_up(S, j, εB, ηB)               # interpolation, sharp when B^j is sparse
+            bj = min(isfinite(fj) && fj >= 0 ? fj : Inf, isfinite(ij) && ij >= 0 ? ij : Inf)
+            isfinite(bj) || break
+            push!(gp, divu(sqrtu(bj), powd(c, j)))
         end
     end
     return FarBlockCertificate(true, unscale(g), unscale(a), m, which, t, unscale.(gt),
