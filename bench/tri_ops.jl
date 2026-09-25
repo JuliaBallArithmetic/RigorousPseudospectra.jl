@@ -160,7 +160,7 @@ function certify_at(o, op, λ, pr, label, rows)
         ks = pr.ks, nout_pred = pr.nout, arcs_pred = pr.arcs, cost_pred = pr.cost,
         arcs = arcs_actual, sc.α, sc.gbar, sc.abar, sc.γ1, sc.γ2, gate, declined = false,
         cut = ts.c, tri_γ1 = ts.γ1, tri_γ2 = ts.γ2, tri_gbar = ts.gbar, nR2 = ts.nR2,
-        hyp_ok = ext.exterior.ok, region_ok = ext.exterior.region_ok,
+        hyp_ok = ext.exterior.ok, region_ok = ext.region_ok,
         floor = ext.exterior.floor, count = ext.exterior.ok ? ext.count : -1,
         ndiscs = count(d -> isfinite(d.radius), ext.discs), dense_count, nsig, nbad,
         worst = isfinite(worst) ? worst : NaN, t_frame, t_split, t_tri, t_ext, host = HOST))
