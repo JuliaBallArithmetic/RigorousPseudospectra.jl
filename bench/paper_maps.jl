@@ -13,7 +13,9 @@
 #
 #   JULIA_NUM_THREADS=32 OPENBLAS_NUM_THREADS=1 julia --project=bench bench/paper_maps.jl [names]
 #
-# with `names` a comma-separated subset of rdb200, grcar500, kahan500 (default: all three).
+# with `names` a comma-separated subset of the keys of CONFIGS; the default is the three the
+# planner finds a feasible point for, rdb200, airy200 and davies200. A second argument `redraw`
+# draws again from the serialised grid, which is what a change to the contour levels needs.
 
 using RigorousPseudospectra
 using CairoMakie
@@ -309,6 +311,9 @@ for nm in names
         merge(Serialization.deserialize(joinpath(MAPDIR, "map_$(name).jls")),
             (; levels = CONFIGS[name].levels)) :
         run_one(name)
+    # the planner declines an operator no frame of the sizes it will try can reach; there is no
+    # radius to draw a map at, and the reason has already been printed by `build`
+    r === nothing && continue
     draw(r)
     flush(stdout)
 end
