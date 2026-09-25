@@ -48,6 +48,7 @@ ax2 = Axis(fig[1, 2]; xlabel = "frame size dim Q", ylabel = "γ₁γ₂ / R(R �
     spinewidth = 0.8, leftspinecolor = MUTED, bottomspinecolor = MUTED,
     rightspinecolor = MUTED, topspinecolor = MUTED)
 
+nzero = Tuple{String, Int}[]     # points at which the coupling product is exactly zero
 for (i, op) in enumerate(ops)
     rs = sort([r for r in rows if r.op == op]; by = r -> r.dimQ)
     x = Float64[r.dimQ for r in rs]
@@ -66,14 +67,20 @@ for (i, op) in enumerate(ops)
     for r in rs
         d = r.R * (r.R - r.gbar)
         d > 0 || continue
+        # the product reaches 4e-25 on rdb200, and a floor at 1e-20 drew that as a flat line at
+        # the floor; only an exact zero, which no log axis can carry, is dropped
+        v = Float64(r.γ1 * r.γ2 / d)
+        v > 0 || (push!(nzero, (op, r.dimQ)); continue)
         push!(xg, Float64(r.dimQ))
-        push!(g, max(r.γ1 * r.γ2 / d, 1e-20))
+        push!(g, v)
     end
     if !isempty(g)
         lines!(ax2, xg, g; color = c, linewidth = 1.6)
         scatter!(ax2, xg, g; color = c, marker = m, markersize = 7)
     end
 end
+isempty(nzero) ||
+    println("coupling product exactly zero, omitted from panel b: ", join(string.(nzero), ", "))
 hlines!(ax2, [1.0]; color = INK, linewidth = 1.4)
 text!(ax2, 0.02, 0.96; text = "the gate fails above this line", space = :relative,
     align = (:left, :top), color = INK, fontsize = 11)
