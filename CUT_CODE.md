@@ -169,3 +169,88 @@ Describes only the dead sweep.
 #
 # Nothing here is certified: it chooses the radius, and the cover afterwards is the certificate.
 ```
+
+## sigma_zorder_lo, src/triangular.jl
+
+The cut ordered at z by increasing |z - T_ii| instead of once by decreasing |lambda|.
+Measured against the |lambda|-sort and against one verified SVD over eight operator rows on
+2026-09-26; it equals the |lambda|-sort on three and is below it on five, and neither cut
+reaches the SVD on any row. The record is ~/Write/KrylovPseudospectra/20260926_cut_ordering.md.
+
+```julia
+# ------------------------------------------------------------------------------------------------
+# The z-ordered cut
+# ------------------------------------------------------------------------------------------------
+
+"""
+    sigma_zorder_lo(ts, z, c; mmax = 8) -> (; floor, s11, s22, γ1, γ2, t_ord)
+
+The certified lower bound on `σ_min(G̃ − zM)` from a cut chosen *at* `z`: the Schur factor is
+reordered so that the `c` diagonal entries nearest `z`, those of smallest `|z − T_ii|`, occupy the
+leading block, and \\eqref{eq:assembly} is applied to that cut.
+
+The ordering of [`triangular_split`](@ref) is by `|λ|` and is fixed for the whole contour, which is
+a proxy for distance from the circle; at a given `z` what governs `σ_min` is `|z − λ_i|`, and two
+eigenvalues of equal modulus sit at different distances from one `z`. The leading block here is the
+one carrying the directions in which `zI − T` is nearly singular, which is what the verified SVD is
+worth paying for, and the trailing block is as far from `z` as that `z` allows.
+
+The reordering is LAPACK `trsen` on the floating-point Schur factor, so the unitary `U` it returns
+is unitary only up to rounding; the certified quantities come from `U*T̂U` formed in ball
+arithmetic, which carries that error, and the floor is divided by the same `ts.divisor` as
+[`sigma_tri_lo`](@ref), the outer change of basis being unchanged.
+
+Costs one reordering and one ball triple product per `z`, against one reordering for the whole
+contour in [`sigma_tri_lo`](@ref).
+"""
+function sigma_zorder_lo(ts::TriangularSplit, z::Number, c::Integer; mmax::Integer = 8)
+    k = ts.k
+    1 <= c < k || return (; floor = 0.0, s11 = 0.0, s22 = 0.0, γ1 = Inf, γ2 = Inf, t_ord = 0.0)
+    zc = ComplexF64(z)
+    t_ord = @elapsed begin
+        # The leading block must hold every eigenvalue of modulus at least `R`, or the trailing
+        # block carries them and `‖T₂₂‖ > R` leaves eq:farpower with nothing to say; those are also
+        # the eigenvalues prop:count is counting. Distance to `z` orders only what is left, so the
+        # leading block is the exterior spectrum together with the directions in which `zI − T` is
+        # nearest to singular.
+        out = [abs(ts.T[i, i]) >= ts.R for i in 1:k]
+        nout = count(out)
+        nout < k || return (; floor = 0.0, s11 = 0.0, s22 = 0.0, γ1 = Inf, γ2 = Inf, t_ord = 0.0)
+        c = max(c, nout)
+        c < k || return (; floor = 0.0, s11 = 0.0, s22 = 0.0, γ1 = Inf, γ2 = Inf, t_ord = 0.0)
+        inside = findall(!, out)
+        d = [abs(zc - ts.T[i, i]) for i in inside]
+        sel = copy(out)
+        sel[inside[partialsortperm(d, 1:(c - nout))]] .= true
+        Tf = copy(ts.T)
+        U = Matrix{ComplexF64}(I, k, k)
+        _ordschur!(Tf, U, sel)
+        Ub = BallMatrix(U)
+        Tz = _bmul(_bmul(BallMatrix(Matrix(U')), ts.That), Ub)
+    end
+    cur, rest = 1:c, (c + 1):k
+    s11 = subd(sigmin_lo(_bsub(_tri_blockball(Tz, cur, cur), _zm_ball_id(c, zc))), ts.corr)
+    s11 > 0 || return (; floor = 0.0, s11, s22 = 0.0, γ1 = Inf, γ2 = Inf, t_ord)
+    γ1 = addu(opnorm_up(_tri_blockball(Tz, cur, rest)), ts.corr)
+    γ2 = addu(opnorm_up(_tri_blockball(Tz, rest, cur)), ts.corr)
+    # the trailing block through its powers, as in eq:farpower; the loop stops as soon as the
+    # bound is positive at this z, since further powers cannot be needed
+    Pd = _tri_blockball(Tz, rest, rest)
+    gj = Float64[]
+    Nj = Pd
+    s22 = 0.0
+    for j in 1:min(mmax, length(rest))
+        j > 1 && (Nj = _bmul(Nj, Pd))
+        push!(gj, opnorm_up(Nj; svd = false))
+        g1 = addu(gj[1], ts.corr)
+        gc = [addu(gj[i], subu(powu(g1, i), powd(gj[1], i))) for i in eachindex(gj)]
+        s22 = max(farshort_lo(zc, g1), farpower_lo(zc, gc))
+        s22 > 0 && break
+    end
+    s22 > 0 || return (; floor = 0.0, s11, s22, γ1, γ2, t_ord)
+    num = subd(muld(s11, s22), mulu(γ1, γ2))
+    num > 0 || return (; floor = 0.0, s11, s22, γ1, γ2, t_ord)
+    den = sumu((s11, s22, γ1, γ2))
+    return (; floor = divd(divd(num, den), ts.divisor), s11, s22, γ1, γ2, t_ord)
+end
+```

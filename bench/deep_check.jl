@@ -102,7 +102,22 @@ function run_row(name::AbstractString, target::Integer)
         end
     end
 
+    # the triangular route of sec:triangular on the same compression: an ordered Schur cut in the
+    # unitary basis, no Sylvester similarity and no kappa. Added 2026-09-26; deepsplit.jl landed on
+    # 09-14 and triangular.jl on 09-19, so the two had never been run against each other.
+    t_ts = @elapsed (ts = RP.triangular_split(sc.G, sc.M, R; α = sc.α))
     zs = ComplexF64[R * cis(2π * t / NTHETA) for t in 0:(NTHETA - 1)]
+    t_z_tri = NaN
+    s11_tri = NaN
+    tri_c = -1
+    tri_gbar = NaN
+    tri_div = NaN
+    if ts !== nothing
+        t_z_tri = @elapsed s11_tri = minimum(RP.sigma_tri_lo(ts, z) for z in zs)
+        tri_c = ts.c
+        tri_gbar = ts.gbar
+        tri_div = ts.divisor
+    end
     t_z_svd = @elapsed s11_svd = minimum(RP.sigma11_lo(sc, z; method = :svd) for z in zs)
     t_z_two = @elapsed s11_two = minimum(RP.sigma11_lo(scs, z; method = :split) for z in zs)
     t_z_deep = NaN
@@ -172,7 +187,8 @@ function run_row(name::AbstractString, target::Integer)
         full_ok = mr.ok, full_nclusters = mr.ok ? length(mr.clusters) : -1,
         s11_svd, s11_two, s11_deep, s11_deep2,
         t_z_svd = t_z_svd / NTHETA, t_z_two = t_z_two / NTHETA, t_z_deep = t_z_deep / NTHETA,
-        t_z_deep2 = t_z_deep2 / NTHETA,
+        t_z_deep2 = t_z_deep2 / NTHETA, t_z_tri = t_z_tri / NTHETA, t_ts, s11_tri,
+        tri_c, tri_gbar, tri_div,
         cv_old, cv_deep,
         cnt_old = cnt_old[2] ? cnt_old[1] : -1, cnt_deep = cnt_deep[2] ? cnt_deep[1] : -1,
         discs_old = ext_old === nothing ? -1 : count(d -> isfinite(d.radius), ext_old.discs),
@@ -210,6 +226,10 @@ function print_row(r)
         "floor on Γ", "count", "discs")
     @printf("%-10s %12.4e %12.4e %8s %12.4e %8d %8d\n", "svd, full", r.s11_svd, r.t_z_svd,
         r.cv_old.ok, r.cv_old.floor, r.cnt_old, r.discs_old)
+    isnan(r.s11_tri) ||
+        @printf("%-10s %12.4e %12.4e %8s %12s %8d %8s   cut %d of %d, ḡ_22 %.4g, divisor %.6f\n",
+            "triangular", r.s11_tri, r.t_z_tri, "-", "-", r.tri_c, "-", r.tri_c, r.dimQ,
+            r.tri_gbar, r.tri_div)
     @printf("%-10s %12.4e %12.4e %8s %12s %8s %8s\n", "two-tier", r.s11_two, r.t_z_two, "-", "-",
         "-", "-")
     if r.cv_deep !== nothing
