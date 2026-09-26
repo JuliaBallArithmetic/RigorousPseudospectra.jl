@@ -450,10 +450,13 @@ function estimate_orders(op::LinOp, Q::AbstractMatrix, mmax::Integer; nsamples::
     k = size(Q, 2)
     T = promote_type(op.T, eltype(Q)) <: Complex ? ComplexF64 : Float64
     Qm = Matrix{T}(Q)
-    s = Int(nsamples)
+    # the thin Q of an n × s block has min(n, s) columns, so a sample count above the dimension
+    # silently narrows X; everything sized against the block has to follow it and not `nsamples`
+    s = min(Int(nsamples), n)
     X = T <: Complex ? (randn(rng, n, s) .+ im .* randn(rng, n, s)) ./ sqrt(2) :
         randn(rng, n, s)
     X = Matrix{T}(Matrix(qr(Matrix{T}(X)).Q))
+    s = size(X, 2)
     Y = similar(X)
     T1 = similar(X)
     T2 = similar(X)
