@@ -185,7 +185,12 @@ function candidate_sylvester(G::AbstractMatrix; M = nothing, cluster_tol = nothi
             end
             X = X ./ sc
             nsolve += 1
-            nx = norm(X)
+            # the spectral norm, not the Frobenius one: it is ‖X‖₂ that sets
+            # κ([I X; 0 I]) = ((‖X‖₂+√(‖X‖₂²+4))/2)² ≈ ‖X‖₂² and the rounding of the transform
+            # in β_Λ. ‖X‖_F overestimates it by up to √(min(size(X)...)), measured at 1.4 to 2.1
+            # on the shapes trsyl returns here, so the merge fired earlier than it needed to and
+            # coarsened the blocks for nothing.
+            nx = isempty(X) ? 0.0 : opnorm(X)
             if isfinite(nx) && nx <= xmax
                 maxX = max(maxX, nx)
                 W[:, rest] .+= W[:, cur] * X
