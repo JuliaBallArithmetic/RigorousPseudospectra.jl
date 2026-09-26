@@ -173,8 +173,9 @@ function run_one(name)
     b === nothing && return nothing
     g = gridmap(b; cfg.ng)
     sc = b.sc
-    @printf("%s: n = %d, dim Q = %d, R = %.6g, ḡ = %.6g, γ1γ2 = %.4g, frame %.1f s, split %.1f s\n",
-        name, sc.n, sc.k, b.R, sc.gbar, sc.γ1 * sc.γ2, b.t_frame, b.t_split)
+    @printf("%s: n = %d, dim Q = %d, R = %.6g, ḡ = %.6g at order %d, γ1γ2 = %.4g, frame %.1f s, split %.1f s\n",
+        name, sc.n, sc.k, b.R, sc.gbar, sc.far === nothing ? -1 : sc.far.m,
+        sc.γ1 * sc.γ2, b.t_frame, b.t_split)
     @printf("   grid %d × %d over [%.4g, %.4g]², certified %.1f s, dense %.1f s\n",
         cfg.ng, cfg.ng, -g.half, g.half, g.t_cert, g.t_dense)
 

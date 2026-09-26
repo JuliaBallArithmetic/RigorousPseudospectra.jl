@@ -58,8 +58,11 @@ function run_plan(name::AbstractString; kss = nothing, mmax::Integer = 12, nR::I
         cnt, okc, chk = RP.count_exterior(sc, b.R; nθ = NTHETA, maxdepth = MAXDEPTH,
             method = :svd)
     end
-    @printf("  dim Q = %d, α ≤ %.2e, ḡ ≤ %.6g (planner %.6g), γ1 ≤ %.4e (planner %.4e), γ2 ≤ %.4e (planner %.4e)\n",
-        sc.k, sc.α, sc.gbar, b.gbar_m, sc.γ1, b.γ1, sc.γ2, b.γ2)
+    # the order the certified sweep chose, which is not the planner's grid column `b.m`: without it
+    # a ḡ from one run cannot be read against a ḡ from another
+    @printf("  dim Q = %d, α ≤ %.2e, ḡ ≤ %.6g at order %d (planner %.6g at order %d), γ1 ≤ %.4e (planner %.4e), γ2 ≤ %.4e (planner %.4e)\n",
+        sc.k, sc.α, sc.gbar, sc.far === nothing ? -1 : sc.far.m, b.gbar_m, b.m,
+        sc.γ1, b.γ1, sc.γ2, b.γ2)
     s11 = minimum(RP.sigma11_lo(sc, b.R * cis(2π * t / 24); method = :svd) for t in 0:23)
     s11s = minimum(RP.sigma11_lo(sc, b.R * cis(2π * t / 24); method = :split) for t in 0:23)
     @printf("  σ11(R) ≥ %.4e by svdbox, %.4e by the split (planner %.4e); R − ḡ = %.4e (planner %.4e), γ1γ2 = %.4e (planner %.4e)\n",
