@@ -114,6 +114,7 @@ struct CircleCheck
     nevals::Int
     minσ11::Float64
     minσ22::Float64
+    reason::Symbol          # :complete, :point_fails, :maxdepth or :not_refinable
 end
 
 """
@@ -148,9 +149,9 @@ function check_circle(σ11lo, gbar::Real, g1::Real, g2::Real, c::Number, r::Real
         error("region must be :interior or :exterior")
     end
     arcs0 = arcs === nothing ? [(0.0, 2π)] : arcs
-    ok, floor, nev, m11, m22 = _check_arcs(σ11lo, σ22lo, gbar, g1, g2, c, r, arcs0; nθ,
+    ok, floor, nev, m11, m22, reason = _check_arcs(σ11lo, σ22lo, gbar, g1, g2, c, r, arcs0; nθ,
         maxdepth)
-    return CircleCheck(c, r, ok, region_ok, region, ok ? floor : 0.0, nev, m11, m22)
+    return CircleCheck(c, r, ok, region_ok, region, ok ? floor : 0.0, nev, m11, m22, reason)
 end
 
 function _check_arcs(σ11lo, σ22lo, gbar, g1, g2, c::ComplexF64, r::Float64, arcs0; nθ, maxdepth)
@@ -174,6 +175,7 @@ function _check_arcs(σ11lo, σ22lo, gbar, g1, g2, c::ComplexF64, r::Float64, ar
         end
     end
     ok = true
+    reason = :complete
     floor = Inf
     m11 = Inf
     m22 = Inf
@@ -191,18 +193,30 @@ function _check_arcs(σ11lo, σ22lo, gbar, g1, g2, c::ComplexF64, r::Float64, ar
             floor = min(floor, f)
             m11 = min(m11, l11)
             m22 = min(m22, l22)
-        elseif d < maxdepth
-            θm = (θa + θb) / 2
-            push!(arcs, (θa, θm, d + 1))
-            push!(arcs, (θm, θb, d + 1))
         else
-            ok = false
-            m11 = min(m11, l11)
-            m22 = min(m22, l22)
-            break
+            # Before bisecting, the endpoints themselves with no Lipschitz margin: if the hypothesis
+            # fails at a sample, no refinement can pass and the failure is the operator's, not the
+            # budget's. Otherwise the arc is bisected, unless the depth cap or the floating-point
+            # resolution of the angle stops it, which is reported as such.
+            _, oka = assembly_floor(a[1], a[2], g1, g2)
+            _, okb = assembly_floor(b[1], b[2], g1, g2)
+            θm = (θa + θb) / 2
+            stop = !(oka && okb) ? :point_fails :
+                   d >= maxdepth ? :maxdepth :
+                   (θm == θa || θm == θb) ? :not_refinable : :none
+            if stop === :none
+                push!(arcs, (θa, θm, d + 1))
+                push!(arcs, (θm, θb, d + 1))
+            else
+                ok = false
+                reason = stop
+                m11 = min(m11, l11)
+                m22 = min(m22, l22)
+                break
+            end
         end
     end
-    return ok, (ok ? floor : 0.0), nev, m11, m22
+    return ok, (ok ? floor : 0.0), nev, m11, m22, reason
 end
 
 """
