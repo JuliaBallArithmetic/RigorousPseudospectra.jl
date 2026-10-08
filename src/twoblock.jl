@@ -179,6 +179,15 @@ function _check_arcs(σ11lo, σ22lo, gbar, g1, g2, c::ComplexF64, r::Float64, ar
     floor = Inf
     m11 = Inf
     m22 = Inf
+    # Every initial sample first, with no Lipschitz margin: if the hypothesis fails at one of them no
+    # refinement can pass, and finding that before any bisection saves the refinement elsewhere.
+    for (θa, _, _) in arcs
+        a = ev(θa)
+        _, oka = assembly_floor(a[1], a[2], g1, g2)
+        if !oka
+            return false, 0.0, nev, a[1], a[2], :point_fails
+        end
+    end
     while !isempty(arcs)
         θa, θb, d = pop!(arcs)
         a = ev(θa)
