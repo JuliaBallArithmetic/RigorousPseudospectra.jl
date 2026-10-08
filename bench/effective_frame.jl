@@ -12,7 +12,12 @@
 # floor σ_{2 dimQ + 1}(A), the dense ‖G22‖ for n <= 2048, γ1, γ2; and at ks = 0 the same frame
 # dimension and ḡ, which is the frame carrying only the eigendirections.
 #
+# On the larger operators the radii can be sampled and sharded: NSAMPLE=m keeps every gap with
+# N <= 16 and m more spread geometrically up to n/2; SHARD=i/S keeps every S-th of those starting
+# at the i-th (0-based). The output file is tagged accordingly.
+#
 #   JULIA_NUM_THREADS=2 OPENBLAS_NUM_THREADS=8 julia --project=bench bench/effective_frame.jl names [method]
+#   NSAMPLE=48 SHARD=0/4 ... julia --project=bench bench/effective_frame.jl rdb5000
 using RigorousPseudospectra, LinearAlgebra, Printf
 include(joinpath(@__DIR__, "pseudospectra_ops.jl"))
 BLAS.set_num_threads(parse(Int, get(ENV, "OPENBLAS_NUM_THREADS", "8")))
@@ -23,6 +28,10 @@ mkpath(OUT)
 names = split(ARGS[1], ",")
 method = length(ARGS) >= 2 ? Symbol(ARGS[2]) : :qr
 DENSE_MAX = 2048
+NSAMPLE = parse(Int, get(ENV, "NSAMPLE", "0"))
+SHARD = get(ENV, "SHARD", "")
+shard_i, shard_S = isempty(SHARD) ? (0, 1) : parse.(Int, split(SHARD, "/"))
+tag = (NSAMPLE > 0 ? ".sampled" : "") * (shard_S > 1 ? ".s$(shard_i)of$(shard_S)" : "")
 
 function evaluate(o, op, A, s, n, R, ks)
     tf = @elapsed ((Q, _) = two_sided_frame(o.matvec, o.adjoint, n, R; ks, Leig = 200,
@@ -50,11 +59,18 @@ for nm in names
     n = size(A, 1)
     lam = sort(abs.(eigvals(A)); rev = true)
     s = svdvals(A)
-    io = open(joinpath(OUT, "effective_frame.$(name).$(method).$(HOST).csv"), "w")
+    io = open(joinpath(OUT, "effective_frame.$(name).$(method)$(tag).$(HOST).csv"), "w")
     println(io, "operator,n,method,N,R,K,dmin,status,nevals,ks,dimQ,gbar,gbar1,floor,normG22,",
         "gamma1,gamma2,dimQ0,gbar0,t,error")
-    for N in 1:(n - 1)
-        lam[N] > lam[N + 1] * (1 + 1e-9) || continue
+    gapN = [N for N in 1:(n - 1) if lam[N] > lam[N + 1] * (1 + 1e-9)]
+    if NSAMPLE > 0
+        upper = [N for N in gapN if 16 < N < n ÷ 2]
+        pick = isempty(upper) ? Int[] : unique(upper[clamp.(round.(Int, exp.(range(0,
+            log(length(upper)); length = NSAMPLE))), 1, length(upper))])
+        gapN = sort(unique(vcat([N for N in gapN if N <= 16], pick)))
+    end
+    gapN = gapN[(shard_i + 1):shard_S:end]
+    for N in gapN
         R = sqrt(lam[N] * lam[N + 1])
         K = count(>=(R), s)
         j = findfirst(<(R), s)
