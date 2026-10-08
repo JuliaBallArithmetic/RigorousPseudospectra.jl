@@ -29,6 +29,7 @@ include(joinpath(@__DIR__, "pseudospectra_ops.jl"))
 
 const OUT = joinpath(homedir(), "ResearchData", "KrylovPseudospectra_Data", "pseudospectra")
 const MAPDIR = joinpath(OUT, "maps")
+const HOST = readchomp(`hostname -s`)
 const FIGDIR = joinpath(@__DIR__, "figures")
 const PAPERDIR = joinpath(homedir(), "Write", "KrylovPseudospectra", "figures")
 foreach(mkpath, (MAPDIR, FIGDIR, PAPERDIR))
@@ -62,6 +63,24 @@ const CONFIGS = Dict(
     "grcar500" => (; ng = 280, levels = [1e-3, 1e-2, 1e-1], discs = false, zoom = nothing,
         ngz = 0),
     "kahan500" => (; ng = 240, levels = [1e-4, 1e-3, 1e-2], discs = false, zoom = nothing,
+        ngz = 0),
+    "convdiff_cheb200" => (; ng = 300, levels = [1e-3, 1e-2, 1e-1], discs = true, zoom = nothing,
+        ngz = 0),
+    "orrsom200" => (; ng = 300, levels = [1e-3, 1e-2, 1e-1], discs = true, zoom = nothing,
+        ngz = 0),
+    "landau400" => (; ng = 300, levels = [1e-3, 1e-2, 1e-1], discs = true, zoom = nothing,
+        ngz = 0),
+    "rdb800l" => (; ng = 200, levels = [1e-3, 1e-2, 1e-1], discs = true, zoom = nothing,
+        ngz = 0),
+    "nos3" => (; ng = 200, levels = [1e-3, 1e-2, 1e-1], discs = true, zoom = nothing,
+        ngz = 0),
+    "olm1000" => (; ng = 200, levels = [1e-3, 1e-2, 1e-1], discs = true, zoom = nothing,
+        ngz = 0),
+    "qh1484" => (; ng = 160, levels = [1e-3, 1e-2, 1e-1], discs = true, zoom = nothing,
+        ngz = 0),
+    "hatano2000" => (; ng = 160, levels = [1e-3, 1e-2, 1e-1], discs = true, zoom = nothing,
+        ngz = 0),
+    "rdb2048" => (; ng = 160, levels = [1e-3, 1e-2, 1e-1], discs = true, zoom = nothing,
         ngz = 0))
 
 function build(name)
@@ -85,23 +104,11 @@ function build(name)
     plan_table(pl)
     t_frame = @elapsed ((Q, finfo) = two_sided_frame(o.matvec, o.adjoint, o.n, R; ks = b.ks,
         Leig = 200, Lsv = min(o.n, 2b.ks + 60), T = op.T))
-    t_split = @elapsed (sc = certify_split(op, Q; target = R, compression = :none))
-    # the compression is treated by the triangular route of sec:triangular; the frame and the far
-    t_tri = @elapsed ts = triangular_split(sc.G, sc.M, R; α = sc.α, factor = 2.0)
-    ts === nothing && error("triangular_split declined on $name")
-    @printf("   triangular cut %d of %d, γ1 = %.3e, γ2 = %.3e, divisor %.6f (%.1f s)\n",
-        ts.c, ts.k, ts.γ1, ts.γ2, ts.divisor, t_tri)
-    σ22lo = z -> max(farshort_lo(z, sc.gbar), farpower_lo(z, sc.gbars_power))
-    function floor_at(z)
-        s11 = sigma_tri_lo(ts, z)
-        s11 > 0 || return 0.0
-        s22 = σ22lo(z)
-        s22 > 0 || return 0.0
-        f1, _ = assembly_floor(s11, s22, sc.γ1, sc.γ2)
-        f2, _ = blockdom_floor(s11, s22, sc.γ1, sc.γ2)
-        return max(f1, f2)
-    end
-    return (; o, op, sc, ts, σ22lo, floor_at, R, t_frame, t_split, t_tri, plan = pl.best,
+    # sigma11 by one verified SVD of the compression pencil per z (sec:vbd), sigma22 = |z| - gbar;
+    # the compression is certified by Miyajima-Rump for the counts
+    t_split = @elapsed (sc = certify_split(op, Q; target = R, compression = :full))
+    floor_at(z) = resolvent_floor(sc, z; method = :svd).floor
+    return (; o, op, sc, floor_at, R, t_frame, t_split, plan = pl.best,
         absl1 = maximum(abs, pl.lambda))
 end
 
@@ -157,10 +164,8 @@ function widest_disc(b, R, centres, i; nradii = 10, nθ = 64, maxdepth = 6)
     best = centres[i].radius
     rmin < rmax || return best
     for r in reverse(exp.(range(log(rmin), log(rmax * (1 - 1e-6)); length = nradii)))
-        ck = check_circle(z -> sigma_tri_lo(b.ts, z), b.sc.gbar, b.sc.γ1, b.sc.γ2, c, r;
-            region = :interior, nθ, maxdepth, σ22lo = b.σ22lo)
-        c2 = count(z -> abs(z - c) < r, diag(b.ts.T))
-        if ck.ok && ck.region_ok && c2 == centres[i].count
+        c2, okc, ck = count_disc(b.sc, c, r; nθ, maxdepth, method = :svd)
+        if okc && c2 == centres[i].count
             return r
         end
     end
@@ -196,28 +201,17 @@ function run_one(name)
     discs = NamedTuple[]
     cnt = -1
     if cfg.discs
-        t = @elapsed (ext = certify_exterior_tri(b.ts, sc.gbar, sc.γ1, sc.γ2; R = b.R,
-            σ22lo = b.σ22lo, samples = 256, nradii = 10))
+        t = @elapsed (ext = certify_exterior(sc, b.R; nθ = 256, maxdepth = 8, nradii = 10,
+            method = :svd))
         cnt = ext.count
         good = [d for d in ext.discs if isfinite(d.radius)]
         tw = @elapsed (wide = [widest_disc(b, b.R, good, i) for i in eachindex(good)])
         discs = [(; d.center, d.radius, rmax = w, d.count) for (d, w) in zip(good, wide)]
         @printf("   cor:agree: count %d, %d discs, all closed %s (%.1f s + %.1f s for the widest)\n",
             ext.count, length(discs), ext.ok, t, tw)
-        # which of the three gates withheld the count: the cover itself, the region condition
-        # r_min > ḡ of prop:count, or an eigenvalue within the sagitta of R
         e = ext.exterior
-        @printf("      cover %s over %d points, %d bisections, floor %.4e, sagitta %.3e, r_min %.6f; region (r_min > ḡ = %.6g) %s; no eigenvalue within the sagitta of R %s\n",
-            e.ok, e.npoints, e.nbisect, e.floor, e.sagitta, e.rmin, Float64(sc.gbar),
-            ext.region_ok, ext.count_ok)
-        if !ext.count_ok
-            near = sort([z for z in diag(b.ts.T) if abs(abs(z) - b.R) <= 10 * e.sagitta];
-                by = z -> abs(abs(z) - b.R))
-            for z in near[1:min(end, 4)]
-                @printf("      eigenvalue %+.10f %+.10fi at |z| = %.10f, |z| - R = %+.4e\n",
-                    real(z), imag(z), abs(z), abs(z) - b.R)
-            end
-        end
+        @printf("      circle cover %s over %d evaluations, floor %.4e, min σ11 %.4e, min σ22 %.4e; region (R > ḡ = %.6g) %s\n",
+            e.ok, e.nevals, e.floor, e.minσ11, e.minσ22, Float64(sc.gbar), e.region_ok)
         for d in discs
             @printf("      centre %+.10f %+.10fi  r_min %.4e  r_max %.4e  count %d\n",
                 real(d.center), imag(d.center), d.radius, d.rmax, d.count)
@@ -257,7 +251,7 @@ function run_one(name)
         γ2 = sc.γ2, ng = cfg.ng, half = g.half, xs = g.xs, ys = g.ys, F = g.F, D = g.D,
         ev = g.ev, nb, strict, loose, tol, t_cert = g.t_cert, t_dense = g.t_dense,
         t_frame = b.t_frame, t_split = b.t_split, discs, count = cnt, levels = cfg.levels, z)
-    Serialization.serialize(joinpath(MAPDIR, "map_$(name).jls"), res)
+    Serialization.serialize(joinpath(MAPDIR, "map_$(name).$(HOST).jls"), res)
     return res
 end
 
@@ -325,7 +319,9 @@ end
 
 # the operators the planner finds a point for; grcar500 and kahan500 are in CONFIGS but declined,
 # and a map of a radius the method refuses to choose would say nothing
-names = isempty(ARGS) ? ["rdb200", "airy200", "davies200"] : split(ARGS[1], ',')
+names = isempty(ARGS) ? ["rdb200", "rdb800l", "rdb2048", "nos3", "olm1000", "qh1484", "grcar500",
+    "kahan500", "davies200", "airy200", "orrsom200", "landau400", "hatano2000",
+    "convdiff_cheb200"] : split(ARGS[1], ',')
 redraw = length(ARGS) >= 2 && ARGS[2] == "redraw"
 @info "threads" julia = Threads.nthreads() blas = BLAS.get_num_threads()
 for nm in names
@@ -333,7 +329,7 @@ for nm in names
     # `redraw` draws again from the serialised grid, which is what a change to the contour levels
     # needs; nothing is recomputed and the levels come from CONFIGS.
     r = redraw ?
-        merge(Serialization.deserialize(joinpath(MAPDIR, "map_$(name).jls")),
+        merge(Serialization.deserialize(joinpath(MAPDIR, "map_$(name).$(HOST).jls")),
             (; levels = CONFIGS[name].levels)) :
         run_one(name)
     # the planner declines an operator no frame of the sizes it will try can reach; there is no

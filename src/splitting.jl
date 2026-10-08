@@ -93,9 +93,6 @@ function certify_split(op::LinOp, Q::AbstractMatrix; order = :auto, compression 
     if far_bound === nothing
         far = certify_far_block(op, Q, fd; order, target, kwargs...)
         gbar, abar = far.gbar, far.abar
-        # the sweep's own bounds on ‖G22^j‖, so that eq:farpower has something to work with;
-        # without them σ22 is always the order-one form
-        isempty(gbars_power) && (gbars_power = far.gbars_power)
     else
         far = nothing
         gbar, abar = Float64(far_bound[1]), Float64(far_bound[2])
