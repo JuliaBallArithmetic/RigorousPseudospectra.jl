@@ -108,17 +108,33 @@ function gkl(Amul, Aadj, n::Integer, L::Integer; T = ComplexF64,
 end
 
 """
-    rrqr_frame(M; droptol = 1e-8) -> Q
+    rrqr_frame(M; droptol = 1e-8, method = :qr) -> Q
 
-The orthonormal factor of a rank-revealing (column-pivoted) QR of `M`, the columns with
-`|R_ii| < droptol |R_11|` dropped (Definition def:Q).
+The orthonormal factor of a rank-revealing factorisation of `M` (Definition def:Q), the directions
+whose diagonal falls below `droptol` times the largest being dropped. `method = :qr` is
+column-pivoted QR, `|R_ii| < droptol |R_11|`; `:svd` keeps the left singular vectors with
+`s_i >= droptol s_1`; `:qlp` is Stewart's QLP, a second column-pivoted QR applied to the transpose of
+`R`, whose diagonal tracks the singular values more closely than that of `R`: the rank is read off
+it, and the leading columns of the first orthonormal factor are kept.
 """
-function rrqr_frame(M::AbstractMatrix; droptol::Real = 1e-8)
+function rrqr_frame(M::AbstractMatrix; droptol::Real = 1e-8, method::Symbol = :qr)
     size(M, 2) == 0 && return zeros(eltype(M), size(M, 1), 0)
-    F = qr(M, ColumnNorm())
-    d = abs.(diag(F.R))
-    r = count(>=(droptol * d[1]), d)
-    Q = Matrix(F.Q)[:, 1:r]
+    if method === :svd
+        F = svd(M)
+        r = count(>=(droptol * F.S[1]), F.S)
+        Q = F.U[:, 1:r]
+    elseif method === :qr || method === :qlp
+        F = qr(M, ColumnNorm())
+        d = abs.(diag(F.R))
+        if method === :qlp
+            G = qr(Matrix(F.R)', ColumnNorm())
+            d = abs.(diag(G.R))
+        end
+        r = count(>=(droptol * d[1]), d)
+        Q = Matrix(F.Q)[:, 1:r]
+    else
+        error("method must be :qr, :svd or :qlp")
+    end
     return Matrix(qr(Q).Q)[:, 1:r]           # one more Householder pass
 end
 
@@ -133,7 +149,7 @@ leading `ks` right and left Ritz singular vectors. `sides = :right` or `:left` k
 """
 function two_sided_frame(Amul, Aadj, n::Integer, R::Real; ks::Integer,
         keig::Bool = true, Leig::Integer = 60, Lsv::Integer = 2ks + 20, droptol::Real = 1e-8,
-        sides::Symbol = :both, T = Float64, extra = nothing)
+        sides::Symbol = :both, T = Float64, extra = nothing, method::Symbol = :qr)
     Wλ = keig ? first(eigendirections(Amul, n, R; L = Leig, T)) : zeros(T, n, 0)
     Vr, Ul, σ = gkl(Amul, Aadj, n, Lsv; T)
     ks = min(ks, size(Vr, 2))
@@ -142,7 +158,7 @@ function two_sided_frame(Amul, Aadj, n::Integer, R::Real; ks::Integer,
     sides in (:both, :left) && push!(cols, Ul[:, 1:ks])
     extra === nothing || push!(cols, extra)
     M = hcat(cols...)
-    Q = rrqr_frame(M; droptol)
+    Q = rrqr_frame(M; droptol, method)
     return Q, (; neig = size(Wλ, 2), ks, dimQ = size(Q, 2), ritz_sv = σ)
 end
 
