@@ -6,6 +6,27 @@
 # the operator as two functions on vectors, for the floating-point Krylov processes of frame.jl
 _vecmul(op::LinOp, adj::Bool) = x -> vec(apply_cols(op, reshape(x, :, 1), adj))
 
+# leading singular values of the far block P⊥AP⊥, P⊥ = I − QQ* for an orthonormal Q, by a
+# Golub-Kahan-Lanczos run applied matrix-free
+function _far_singular_values(Amul, Aadj, Q, n, L, T)
+    proj(x) = x - Q * (Q' * x)
+    Bmul(x) = proj(Amul(proj(x)))
+    Badj(x) = proj(Aadj(proj(x)))
+    _, _, σ = gkl(Bmul, Badj, n, min(n, L); T)
+    return σ
+end
+
+# the prediction of (tr H^t)^{1/2t} = (Σ σ_i(B)^{2t})^{1/2t} from the computed σ, the r − L values
+# not computed (r the rank bound n − k) taken equal to the last one computed
+function _trace_prediction(σ, r, t)
+    isempty(σ) && return 0.0
+    L = length(σ)
+    s = σ[1]
+    s > 0 || return 0.0
+    tot = sum((x / s)^(2t) for x in σ) + max(r - L, 0) * (σ[end] / s)^(2t)
+    return s * tot^(1 / (2t))
+end
+
 """
     helper_gaps(op::LinOp; L = 200) -> Vector{NamedTuple}
 
@@ -24,7 +45,7 @@ end
 
 """
     helper_diagnose(op::LinOp, R; ks = nothing, Leig = 200, Lsv = 200, mmax = 16, nθ = 32,
-                    nsamples = 8, method = :qr, verbose = true) -> NamedTuple
+                    Lfar = 60, method = :qr, verbose = true) -> NamedTuple
 
 Uncertified. Floating-point estimates, at the radius `R`, of what [`certify_split`](@ref) and the
 cover of the circle `|z| = R` will compute:
@@ -34,12 +55,14 @@ cover of the circle `|z| = R` will compute:
   Golub-Kahan-Lanczos run of length `Lsv` (`K_reached = true` when all of them are `≥ R`, so that
   `K` and `dmin` are only lower bounds); by Proposition prop:frame no frame of dimension below
   `dmin` gives `‖G22‖ < R`;
-* for the frame of def:Q with `ks` singular vectors per side (default `K`): `dimQ`, the
-  predictions `gbar_est[t] = v_t (n − k)^{1/2t}` of the bound the sweep of order `t ≤ mmax` would
-  certify, `v_t` the floating-point estimate of [`estimate_orders`](@ref), and the order `m` that
-  [`certify_far_block`](@ref) would choose for the target `R` from the same predictions. The factor
-  `(n − k)^{1/2t}` is exact for a far block with `n − k` equal singular values and overestimates
-  when they decay, by a factor 9 at order 1 on the test matrix of `test/runtests.jl`;
+* for the frame of def:Q with `ks` singular vectors per side (default `K`): `dimQ`; the leading
+  singular values `σG22` of the far block `B = P⊥AP⊥`, from a Golub-Kahan-Lanczos run of length
+  `Lfar` applied matrix-free, so that `σG22[1]` estimates `‖G22‖`; the predictions
+  `gbar_est[t] = (Σ_{i≤L} σ_i^{2t} + (n − k − L) σ_L^{2t})^{1/2t}` of `(tr H^t)^{1/2t}`, the quantity
+  the sweep of order `t ≤ mmax` bounds, with the singular values not computed taken equal to the
+  last one computed, which overestimates them; and the order `m`, the least `t` whose prediction is
+  below `R` with a margin of 5%, or else the least within 5% of the best. Pass it to
+  [`certify_split`](@ref) as `order = m`;
 * `γ1`, `γ2` and the least `σ11 = σ_min(G11 − zI)` over `nθ` points of the circle, formed in floating
   point on that frame, and `margin = σ11 (R − gbar_est[m]) − γ1γ2`, whose sign predicts whether the
   hypothesis of thm:assembly holds at the samples.
@@ -47,7 +70,7 @@ cover of the circle `|z| = R` will compute:
 With `verbose = true` the numbers are also printed.
 """
 function helper_diagnose(op::LinOp, R::Real; ks = nothing, Leig::Integer = 200,
-        Lsv::Integer = 200, mmax::Integer = 16, nθ::Integer = 32, nsamples::Integer = 8,
+        Lsv::Integer = 200, Lfar::Integer = 60, mmax::Integer = 16, nθ::Integer = 32,
         method::Symbol = :qr, verbose::Bool = true)
     n = op.n
     T = op.T
@@ -64,8 +87,8 @@ function helper_diagnose(op::LinOp, R::Real; ks = nothing, Leig::Integer = 200,
     Q, _ = two_sided_frame(Amul, Aadj, n, R; ks = ksuse, Leig, Lsv = min(n, 2max(ksuse, 1) + 60),
         T, method)
     k = size(Q, 2)
-    est = estimate_orders(op, Q, mmax; nsamples)
-    gbar_est = _predicted_gbar(est, n, k)
+    σG22 = _far_singular_values(Amul, Aadj, Q, n, Lfar, T)
+    gbar_est = [_trace_prediction(σG22, n - k, t) for t in 1:mmax]
     m = _choose_order(gbar_est, R, 0.05)
     X = apply_cols(op, Q, false)
     Xt = apply_cols(op, Q, true)
@@ -74,7 +97,8 @@ function helper_diagnose(op::LinOp, R::Real; ks = nothing, Leig::Integer = 200,
     γ1 = k == 0 ? 0.0 : opnorm(Xt - Q * (Q' * Xt))
     σ11 = k == 0 ? Inf : minimum(svdvals(G - R * cis(2π * t / nθ) * I)[end] for t in 0:(nθ - 1))
     margin = σ11 * (R - gbar_est[m]) - γ1 * γ2
-    d = (; R, nout, K, K_reached, dmin, ks = ksuse, dimQ = k, gbar_est, m, γ1, γ2, σ11, margin)
+    d = (; R, nout, K, K_reached, dmin, ks = ksuse, dimQ = k, σG22, gbar_est, m, γ1, γ2, σ11,
+        margin)
     verbose && _helper_print(d)
     return d
 end
@@ -85,6 +109,8 @@ function _helper_print(d)
     println("  K = #{σ_i ≥ R}: ", d.K, d.K_reached ? " (at least: every computed σ is ≥ R)" : "",
         ";  least frame dimension with σ_{2d+1} < R: ", d.dmin, d.K_reached ? " (at least)" : "")
     println("  frame: ks = ", d.ks, ", dim Q = ", d.dimQ)
+    println("  far block: ‖G22‖ ≈ ", isempty(d.σG22) ? 0.0 : round(d.σG22[1]; sigdigits = 4),
+        " (largest of ", length(d.σG22), " singular values of P⊥AP⊥)")
     println("  far block, predicted bound by order: ",
         join(("$t: $(round(d.gbar_est[t]; sigdigits = 4))" for t in eachindex(d.gbar_est)), ", "))
     println("  order the sweep would use: ", d.m, " (predicted ḡ = ",

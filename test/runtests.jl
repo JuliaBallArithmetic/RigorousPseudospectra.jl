@@ -214,9 +214,11 @@ end
         ratio = sc.gbar / d.gbar_est[d.m]
         @printf("  helper: predicted ḡ %.3e at order %d, certified %.3e (ratio %.3f); predicted margin %.3e\n",
             d.gbar_est[d.m], d.m, sc.gbar, ratio, d.margin)
-        # the prediction assumes n − k equal singular values in the far block, so it is not below
-        # the certified bound by more than the rounding allowances
-        @test ratio < 1.5
+        # the prediction from the singular values of the far block, against the certified bound at
+        # the same order, and the estimate of ‖G22‖ against the dense one
+        @test 0.5 < ratio < 2
+        g22 = opnorm(truth_blocks(A, Q).G22)
+        @test abs(d.σG22[1] / g22 - 1) < 0.05
         cnt, ok, chk = count_exterior(sc, R; nθ = 64, maxdepth = 64)
         chk.ok && @test d.margin > 0
         @test le(opnorm(truth_blocks(A, Q).G21), 1.0001 * d.γ2 + 1e-12)
