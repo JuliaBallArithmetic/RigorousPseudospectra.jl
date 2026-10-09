@@ -20,6 +20,7 @@ using RigorousPseudospectra
 using LinearAlgebra, SparseArrays, Printf, Random
 import Serialization
 import BallArithmetic
+using BallArithmetic: mul_up, add_up, sqrt_up, sum_up, gamma_bound
 
 const OUT = "/home/isaia/ResearchData/KrylovPseudospectra_Data/bz"
 ispowerof2(k) = k > 0 && (k & (k - 1)) == 0
@@ -73,12 +74,10 @@ function build_L(k::Integer)
         integral_preserving = Q isa RIM.IntegralPreservingDiscretizedOperator)
 end
 
-"Maximum number of nonzeros in a row or a column of `L`."
-function stencil_width(L::SparseMatrixCSC)
-    wc = maximum(diff(L.colptr); init = 0)
-    rows = zeros(Int, size(L, 1))
-    for r in rowvals(L); rows[r] += 1; end
-    return max(wc, maximum(rows; init = 0))
+"Upper bound on the largest column sum of `|L|` for a sparse `L`, summed over the stored entries."
+function _max_colsum_up(L::SparseMatrixCSC)
+    vals = nonzeros(L)
+    return maximum(j -> sum_up(abs(vals[p]) for p in nzrange(L, j)), 1:size(L, 2); init = 0.0)
 end
 
 # ---------------------------------------------------------------------------------------------
@@ -103,14 +102,12 @@ function make_operator(L::SparseMatrixCSC, l::Integer)
     N!(v) = RIM.mul!(Ks[Threads.threadid()], v)
     Amul(x) = N!(L * Vector{Float64}(x))
     Aadj(x) = Lt * N!(copy(Vector{Float64}(x)))
-    # the constant
-    w = stencil_width(L)
-    u = eps(Float64) / 2
-    γ(m) = (m * u) / (1 - m * u)
-    εL = sqrt(Float64(w)) * γ(w)
-    normL = sqrt(opnorm(L, 1) * opnorm(L, Inf))
-    γN = γ(2l + 2)
-    η = nextfloat(normL * (εL + γN * (1 + εL)), 8)
+    # the constant of the header, every operation rounded upward
+    w = RP._stencil_width(L)
+    εL = mul_up(sqrt_up(Float64(w)), gamma_bound(w, Float64))
+    normL = sqrt_up(mul_up(_max_colsum_up(L), _max_colsum_up(Lt)))
+    γN = gamma_bound(2l + 2, Float64)
+    η = mul_up(normL, add_up(εL, mul_up(γN, add_up(1.0, εL))))
     return Amul, Aadj, η, (; w, εL, normL, γN, l, etaA = η, nnzL = nnz(L))
 end
 

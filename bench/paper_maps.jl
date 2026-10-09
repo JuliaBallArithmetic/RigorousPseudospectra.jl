@@ -1,21 +1,19 @@
 # Exterior pseudospectrum maps on the real operators, for the numerics section.
 #
-# For one operator, at the radius the planner chooses: the frame of
-# def:Q at the radius and frame size `plan_split` chooses, one `certify_split` with no peeling,
-# one `triangular_split` of the compression, and then on a grid
-# over a box containing |z| = R the certified lower bound on σ_min(A − zI) of thm:assembly with
-# eq:farshort, grey where there is none. Over it: the circle |z| = R, the circle |z| = ḡ, the dense
-# σ_min = ε contours for a few ε, the eigenvalues, and the isolation discs of cor:agree where the
-# exterior count closed.
+# For one operator, at a radius R and frame size ks given in the environment (a row certified by
+# certify_feasible.jl, experiment 4): the frame of def:Q, one `certify_split` with the sweep of
+# order 8, and then on a grid over a box containing |z| = R the certified lower bound on
+# σ_min(A − zI) of thm:assembly with eq:farshort, σ11 by one verified SVD per point, grey where
+# there is none. Over it: the circle |z| = R, the circle |z| = ḡ, the dense σ_min = ε contours for
+# a few ε, and the eigenvalues.
 #
 # Every grid point is compared against the dense σ_min(A − zI) and the number of points at which
 # the certified bound exceeds it is reported; that number must be zero.
 #
-#   JULIA_NUM_THREADS=32 OPENBLAS_NUM_THREADS=1 julia --project=bench bench/paper_maps.jl [names]
+#   R=<radius> KS=<ks> JULIA_NUM_THREADS=16 OPENBLAS_NUM_THREADS=1 julia --project=bench bench/paper_maps.jl name
 #
-# with `names` a comma-separated subset of the keys of CONFIGS; the default is the three the
-# planner finds a feasible point for, rdb200, airy200 and davies200. A second argument `redraw`
-# draws again from the serialised grid, which is what a change to the contour levels needs.
+# with `name` a key of CONFIGS. A second argument `redraw` draws again from the serialised grid,
+# which is what a change to the contour levels needs.
 
 using RigorousPseudospectra
 using CairoMakie
@@ -87,42 +85,17 @@ function build(name)
     o = ps_operator(name)
     op = LinOp(o.A)
     # R=<radius> KS=<ks> in the environment fix the radius and the frame (a row certified by
-    # certify_feasible.jl) and bypass the planner; the far-block sweep is then of order 8 as there
-    if haskey(ENV, "R")
-        R = parse(Float64, ENV["R"])
-        ks = parse(Int, ENV["KS"])
-        t_frame = @elapsed ((Q, _) = two_sided_frame(o.matvec, o.adjoint, o.n, R; ks, Leig = 200,
-            Lsv = min(o.n, 2ks + 60), T = op.T))
-        t_split = @elapsed (sc = certify_split(op, Q; order = 8, target = R, compression = :none))
-        @printf("%s: R = %.6g, ks = %d (given), dim Q = %d, gbar = %.6g\n", name, R, ks, sc.k, sc.gbar)
-        floor_given(z) = resolvent_floor(sc, z; method = :svd).floor
-        return (; o, op, sc, floor_at = floor_given, R, t_frame, t_split, plan = nothing,
-            absl1 = maximum(abs, eigvals(Matrix(o.A))))
-    end
-    # the radius and the frame are the planner's, not a radius read off a dense eigendecomposition
-    t_plan = @elapsed (pl = plan_split(op, o.matvec, o.adjoint; mmax = 12, nR = 6,
-        amargin = 1.5, Leig = 200))
-    if pl.best === nothing
-        @printf("%s: the planner found no feasible point over %d grid points, %d matvecs, %.1f s",
-            name, length(pl.rows), pl.nmatvec, t_plan)
-        isempty(pl.predicted) ? println() :
-            @printf("; the grid says dim Q ≈ %.0f would be needed at R = %.6g\n",
-                pl.predicted[1].dimQ_needed, pl.predicted[1].R)
-        return nothing
-    end
-    b = pl.best
-    R = b.R
-    @printf("%s: planner %d grid points, %d feasible, %d matvecs, %.1f s -> R = %.6g, ks = %d, dim Q = %d, %d outside\n",
-        name, length(pl.rows), length(pl.feasible), pl.nmatvec, t_plan, R, b.ks, b.dimQ, b.nout)
-    plan_table(pl)
-    t_frame = @elapsed ((Q, finfo) = two_sided_frame(o.matvec, o.adjoint, o.n, R; ks = b.ks,
-        Leig = 200, Lsv = min(o.n, 2b.ks + 60), T = op.T))
-    # sigma11 by one verified SVD of the compression pencil per z (sec:vbd), sigma22 = |z| - gbar;
-    # the compression is certified by Miyajima-Rump for the counts
-    t_split = @elapsed (sc = certify_split(op, Q; target = R, compression = :full))
-    floor_at(z) = resolvent_floor(sc, z; method = :svd).floor
-    return (; o, op, sc, floor_at, R, t_frame, t_split, plan = pl.best,
-        absl1 = maximum(abs, pl.lambda))
+    # certify_feasible.jl); the far-block sweep is of order 8 as there
+    (haskey(ENV, "R") && haskey(ENV, "KS")) ||
+        error("paper_maps.jl: set R and KS to a radius and frame size certified by certify_feasible.jl")
+    R = parse(Float64, ENV["R"])
+    ks = parse(Int, ENV["KS"])
+    t_frame = @elapsed ((Q, _) = two_sided_frame(o.matvec, o.adjoint, o.n, R; ks, Leig = 200,
+        Lsv = min(o.n, 2ks + 60), T = op.T))
+    t_split = @elapsed (sc = certify_split(op, Q; order = 8, target = R, compression = :none))
+    @printf("%s: R = %.6g, ks = %d (given), dim Q = %d, gbar = %.6g\n", name, R, ks, sc.k, sc.gbar)
+    floor_at(z) = resolvent_floor(sc, z).floor
+    return (; o, op, sc, floor_at, R, t_frame, t_split, absl1 = maximum(abs, eigvals(Matrix(o.A))))
 end
 
 "The certified floor and the dense σ_min on the grid `xs × ys`."
@@ -160,31 +133,6 @@ function gridmap(b; ng)
     return (; xs, ys, e.F, e.D, ev, half, e.t_cert, e.t_dense, A)
 end
 
-"""
-The largest radius in a ten-point geometric sequence up to the limit prop:count allows (inside
-`{|z| > R}` and half the distance to the nearest other disc centre) at which the count still
-passes, which is what the "max" rows of `discs.csv` of 2026-09-12 hold; the disc returned by
-`certify_exterior` is the smallest of the sequence and is too small to draw.
-"""
-function widest_disc(b, R, centres, i; nradii = 10, nθ = 64, maxdepth = 6)
-    c = centres[i].center
-    rmax = abs(c) - R
-    for (j, d) in enumerate(centres)
-        j == i && continue
-        rmax = min(rmax, abs(c - d.center) / 2)
-    end
-    rmin = centres[i].radius * (1 + 1e-6) + 1e-300
-    best = centres[i].radius
-    rmin < rmax || return best
-    for r in reverse(exp.(range(log(rmin), log(rmax * (1 - 1e-6)); length = nradii)))
-        c2, okc, ck = count_disc(b.sc, c, r; nθ, maxdepth, method = :svd)
-        if okc && c2 == centres[i].count
-            return r
-        end
-    end
-    return best
-end
-
 function run_one(name)
     cfg = CONFIGS[name]
     # ZOOM=xlo,xhi,ylo,yhi (and NGZ) in the environment add or replace the second panel
@@ -218,34 +166,6 @@ function run_one(name)
 
     discs = NamedTuple[]
     cnt = -1
-    if cfg.discs && !haskey(ENV, "R")
-        t = @elapsed (ext = certify_exterior(sc, b.R; nθ = 256, maxdepth = 8, nradii = 10,
-            method = :svd))
-        cnt = ext.count
-        good = [d for d in ext.discs if isfinite(d.radius)]
-        tw = @elapsed (wide = [widest_disc(b, b.R, good, i) for i in eachindex(good)])
-        discs = [(; d.center, d.radius, rmax = w, d.count) for (d, w) in zip(good, wide)]
-        @printf("   cor:agree: count %d, %d discs, all closed %s (%.1f s + %.1f s for the widest)\n",
-            ext.count, length(discs), ext.ok, t, tw)
-        e = ext.exterior
-        @printf("      circle cover %s over %d evaluations, floor %.4e, min σ11 %.4e, min σ22 %.4e; region (R > ḡ = %.6g) %s\n",
-            e.ok, e.nevals, e.floor, e.minσ11, e.minσ22, Float64(sc.gbar), e.region_ok)
-        for d in discs
-            @printf("      centre %+.10f %+.10fi  r_min %.4e  r_max %.4e  count %d\n",
-                real(d.center), imag(d.center), d.radius, d.rmax, d.count)
-        end
-        # a centre at which no radius on the ladder closed: `discs` keeps only the ones that did,
-        # so without this the log shows an empty list and not the centres it failed at
-        for d in ext.discs
-            isfinite(d.radius) && continue
-            c = d.center
-            rmax = min(abs(c) - b.R,
-                minimum([abs(c - e.center) / 2 for e in ext.discs if e.center != c]; init = Inf))
-            @printf("      centre %+.10f %+.10fi at |z| = %.6g: no radius closed, ladder up to r_max = %.4e (|c| − R = %.4e, ḡ = %.6g)\n",
-                real(c), imag(c), abs(c), rmax, abs(c) - b.R, Float64(sc.gbar))
-        end
-    end
-
     # the zoom panel at the discs
     z = nothing
     if cfg.zoom !== nothing

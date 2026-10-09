@@ -16,7 +16,7 @@ for ke in kes
     L, binfo = build_L(k)
     t = time() - t0
     GC.gc(); m1 = Sys.maxrss()
-    w = stencil_width(L)
+    w = RigorousPseudospectra._stencil_width(L)
     n1 = opnorm(L, 1); ninf = opnorm(L, Inf)
     u = eps(Float64) / 2; γ(m) = (m * u) / (1 - m * u)
     εL = sqrt(Float64(w)) * γ(w)

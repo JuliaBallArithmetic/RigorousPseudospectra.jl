@@ -17,6 +17,7 @@
 #   package's `LinOp(Amul, Aadj, n; epsA)` interface, instead of FPSweep's `Stencil2D` type.
 
 using LinearAlgebra, SparseArrays, Random
+using BallArithmetic: mul_up, sqrt_up, gamma_bound
 
 const PS_MATDIR = joinpath(homedir(), "ResearchData", "KrylovPseudospectra_Data", "fpsweep",
     "matrices")
@@ -281,8 +282,7 @@ The matrix-free convection–diffusion stencil on an `N1×N2` grid, `n = N1·N2`
 function ps_free_operator(N1::Integer, N2::Integer; kmax = 150)
     S = ps_convdiff_fd(N1, N2)
     n = N1 * N2
-    epsA = RigorousPseudospectra.mulu(RigorousPseudospectra.sqrtu(5.0),
-        RigorousPseudospectra.gammau(5, Float64))
+    epsA = mul_up(sqrt_up(5.0), gamma_bound(5, Float64))
     return (; name = "convdiff_fd_$(N1)x$(N2)", A = nothing, n, matvec = ps_cd_mul(S),
         adjoint = ps_cd_adj(S), epsA, hermitian = false,
         source = "$PS_EIGT convdiff_fd_demo, matrix-free 5-point stencil, grid $(N1)×$(N2)",
