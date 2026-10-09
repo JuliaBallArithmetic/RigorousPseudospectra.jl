@@ -7,7 +7,8 @@
 # The eigenvalues of the compression. The frame Q is orthonormal only to rounding, Q = ZS its polar
 # decomposition, and the compression the theorems are about is X = Z*AZ, while what is formed is the
 # ball G ⊇ Q*AQ = SXS. Its eigenvalues are enclosed by BallArithmetic's `verifyeigall` (Rump 2022,
-# Theorem 2.2), and they are transferred to X by a homotopy: ‖S − I‖ ≤ 1 − √(1 − α) ≤ α,
+# Theorem 2.2; where that theorem does not cover the whole spectrum, by the Gershgorin discs of the
+# transformed matrix, `inclusion_discs`), and they are transferred to X by a homotopy: ‖S − I‖ ≤ 1 − √(1 − α) ≤ α,
 # ‖S‖ ≤ √(1 + α), ‖X‖ ≤ ‖G‖/(1 − α), so
 #
 #     ‖G − X‖ = ‖(S − I)XS + X(S − I)‖ ≤ η_α := α(1 + √(1 + α))‖G‖/(1 − α),
@@ -180,26 +181,26 @@ function check_circle(sc::SplitCertificate, c::Number, r::Real; region::Symbol =
         σ22lo = z -> sigma22_lo(sc, z), kwargs...)
 end
 
-"Whether the certificate carries inclusions of the eigenvalues of the compression that cover them all."
-_has_counts(sc::SplitCertificate) = sc.comp !== nothing && sc.comp.spectrum_covered
+"Whether the certificate carries discs holding all the eigenvalues of the compression, with counts."
+_has_counts(sc::SplitCertificate) = sc.comp !== nothing && inclusion_discs(sc.comp)[4]
 
 # the homotopy of the header: a count read off G holds for Z*AZ when σ11 > η_α on the contour
 _transfers(sc::SplitCertificate, chk::CircleCheck) = chk.ok && chk.minσ11 > sc.etaG
 
 """
-The components of the inclusions of the eigenvalues of G: the discs of `verifyeigall` grouped by
-overlap (`overlap_components`), each with the hull of its discs (`ball_hull`) and the number of
-eigenvalues of G it holds, with multiplicity.
+The components of the inclusions of the eigenvalues of G: the discs of `inclusion_discs` (those of
+Theorem 2.2, or the Gershgorin discs of the transformed matrix) grouped by overlap
+(`overlap_components`), each with the hull of its discs (`ball_hull`) and the number of eigenvalues
+of G it holds, with multiplicity.
 """
 function _comps(sc::SplitCertificate)
     _has_counts(sc) || return NamedTuple[]
-    r = sc.comp
-    balls = [Ball(ComplexF64(r.centers[i]), Float64(r.radii[i])) for i in eachindex(r.clusters)]
+    ctr, rad_, cnt_, _ = inclusion_discs(sc.comp)
+    balls = [Ball(ComplexF64(ctr[i]), Float64(rad_[i])) for i in eachindex(ctr)]
     out = NamedTuple[]
     for idx in overlap_components(balls)
         h = foldl(ball_hull, balls[idx])
-        push!(out, (; center = mid(h), radius = rad(h),
-            count = sum(i -> length(r.clusters[i]), idx)))
+        push!(out, (; center = mid(h), radius = rad(h), count = sum(cnt_[idx])))
     end
     sort!(out; by = C -> -abs(C.center))
     return out
