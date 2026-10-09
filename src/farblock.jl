@@ -436,6 +436,23 @@ end
 # The order: a floating-point stochastic estimate (no certificate needed, eq:mincert)
 # ------------------------------------------------------------------------------------------------
 
+# The bound the sweep of order t is predicted to certify, from the estimates v_t of
+# [`estimate_orders`](@ref) and the rank n − k of the block it sums over (see certify_far_block).
+_predicted_gbar(est::AbstractVector, n::Integer, k::Integer) =
+    [est[t] * max(n - k, 1)^(1 / (2t)) for t in eachindex(est)]
+
+# The order: the least t whose predicted bound clears `target` with the margin `tol`, or, with no
+# target or none clearing it, the least t within `tol` of the best prediction.
+function _choose_order(gpred::AbstractVector, target, tol::Real)
+    if target !== nothing
+        m = findfirst(g -> g * (1 + tol) < Float64(target), gpred)
+        m === nothing || return m
+    end
+    vmin = minimum(gpred)
+    m = findfirst(g -> g <= (1 + tol) * vmin, gpred)
+    return m === nothing ? length(gpred) : m
+end
+
 """
     estimate_orders(op, Q, mmax; nsamples = 8, rng) -> Vector{Float64}
 
@@ -572,17 +589,7 @@ function certify_far_block(op::LinOp, Q::AbstractMatrix, fd::FrameData;
         # when no t up to `order_max` does, no sweep of any order on this ladder will certify the
         # far block below the target and there is no point running one. The order is otherwise
         # where the prediction stops improving.
-        rk = max(n - k, 1)
-        gpred = [est[t] * rk^(1 / (2t)) for t in 1:mmax]
-        m = nothing
-        if target !== nothing
-            m = findfirst(g -> g * (1 + order_tol) < Float64(target), gpred)
-        end
-        if m === nothing
-            vmin = minimum(gpred)
-            m = findfirst(g -> g <= (1 + order_tol) * vmin, gpred)
-            m === nothing && (m = mmax)
-        end
+        m = _choose_order(_predicted_gbar(est, n, k), target, order_tol)
     end
     vref = minimum(est[1:m])
     c = (isfinite(vref) && vref > 0) ? 2.0^(-exponent(vref)) : 1.0

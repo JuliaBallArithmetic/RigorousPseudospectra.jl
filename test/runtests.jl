@@ -195,6 +195,33 @@ end
         @test counts_checked > 0
     end
 
+    @testset "uncertified helpers: predictions against the certificate" begin
+        n = 160
+        A = decaying(n; ρ = 0.6, seed = 42, nbig = 3)
+        op = LinOp(A)
+        ev = eigvals(A)
+        ma = sort(abs.(ev); rev = true)
+        gaps = helper_gaps(op; L = 60)
+        @test any(g -> g.N == 3, gaps)
+        R = (ma[3] + ma[4]) / 2
+        d = helper_diagnose(op, R; ks = 12, verbose = false)
+        @test d.nout == count(>(R), abs.(ev))
+        @test d.dimQ > 0 && 1 <= d.m <= length(d.gbar_est)
+        # the certificate on the same frame, at the order the helper names
+        Q, _ = two_sided_frame(x -> A * x, x -> A' * x, n, R; ks = 12, Leig = 200,
+            Lsv = min(n, 2 * 12 + 60))
+        sc = certify_split(op, Q; order = d.m, target = R)
+        ratio = sc.gbar / d.gbar_est[d.m]
+        @printf("  helper: predicted ḡ %.3e at order %d, certified %.3e (ratio %.3f); predicted margin %.3e\n",
+            d.gbar_est[d.m], d.m, sc.gbar, ratio, d.margin)
+        # the prediction assumes n − k equal singular values in the far block, so it is not below
+        # the certified bound by more than the rounding allowances
+        @test ratio < 1.5
+        cnt, ok, chk = count_exterior(sc, R; nθ = 64, maxdepth = 64)
+        chk.ok && @test d.margin > 0
+        @test le(opnorm(truth_blocks(A, Q).G21), 1.0001 * d.γ2 + 1e-12)
+    end
+
     @testset "far block: the sweep certificate against ‖G22‖" begin
         rows = Any[]
         # (a) stored sparse

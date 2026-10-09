@@ -17,6 +17,8 @@ BallArithmetic's.
     frame.jl         §5.1 def:Q (two-sided frame), rem:lanczos (floating point)
     splitting.jl     §5 the certified splitting, the counts through verifyeigall and the
                      homotopy of prop:almostortho, cor:agree, cor:gap, the self-adjoint case
+    helper.jl        uncertified helpers: floating-point estimates of a run's parameters (the
+                     radius, the frame size, the order of the sweep) before it is made
 """
 module RigorousPseudospectra
 
@@ -31,6 +33,7 @@ include("couplings.jl")
 include("farblock.jl")
 include("frame.jl")
 include("splitting.jl")
+include("helper.jl")
 
 export assembly_floor, blockdom_floor, farshort_lo, inclusion_delta
 export CircleCheck, check_circle, union_boundary_arcs, projector_bound
@@ -43,5 +46,6 @@ export SplitCertificate, certify_split, sigma11_lo, sigma22_lo, resolvent_floor
 export pseudospectrum_outside, count_disc, count_exterior, count_union, certify_exterior
 export certify_gap, ProjectorCertificate, certify_projector
 export certify_selfadjoint, eig_intervals, coupling_hermitian
+export helper_gaps, helper_diagnose
 
 end
