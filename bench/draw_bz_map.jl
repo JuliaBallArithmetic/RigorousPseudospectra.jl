@@ -1,10 +1,10 @@
-# The figures for the Belousov-Zhabotinsky maps, drawn from the results serialised by
-# `bench/bz/paper_map_bz.jl`: one figure per noise size, and one four-panel figure comparing them.
-# The two scripts are separate because the computation needs the `bench/bz` project
-# (RigorousInvariantMeasures) and the drawing needs `bench` (CairoMakie), and neither
-# Project.toml was modified.
+# The figures for the Belousov-Zhabotinsky maps of experiment 5, drawn from the results serialised
+# by `bench/bz/paper_map_bz.jl` (paper_map_bz.<tag>.<host>.jls, tag bz_k<KE>_xi<ξ>_N<N>): one figure
+# with one panel per tag given, each panel on its own colour scale with its own colour bar. The two
+# scripts are separate because the computation needs the `bench/bz` project
+# (RigorousInvariantMeasures) and the drawing needs `bench` (CairoMakie).
 #
-#   julia --project=bench bench/draw_bz_map.jl
+#   julia --project=bench bench/draw_bz_map.jl name bz_k12_xi0.1_N4 bz_k16_xi0.1_N4
 
 using CairoMakie
 using Printf
@@ -23,20 +23,14 @@ const DISCCOL = RGBf(1.0, 0.85, 0.0)
 const EVCOL = RGBf(0.85, 0.15, 0.1)
 const COMPCOL = RGBf(1.0, 1.0, 1.0)
 
-const XIS = [1e-1, 1e-2, 1e-3, 1e-4]
-const KE = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 12
-tag(ξ) = "bz_k$(KE)_xi$(ξ)"      # the TAG of bench/bz/paper_map_bz.jl
+const NAME = ARGS[1]
+const TAGS = ARGS[2:end]
 
-"""
-The serialised map for this noise size, taking the most recent when several machines have written
-one; the file is `map_<tag>.<host>.jls`, and the older runs, written before the hostname was part
-of the name, are `map_<tag>.jls`.
-"""
-function load(ξ)
-    pre = "map_$(tag(ξ))"
-    cand = [joinpath(MAPDIR, f) for f in readdir(MAPDIR)
-            if startswith(f, pre * ".") && endswith(f, ".jls")]
-    isempty(cand) && return nothing
+"The serialised map for this tag, the most recent when several machines have written one."
+function load(tag)
+    pre = "paper_map_bz.$(tag)."
+    cand = [joinpath(MAPDIR, f) for f in readdir(MAPDIR) if startswith(f, pre) && endswith(f, ".jls")]
+    isempty(cand) && error("no $(pre)*.jls in $MAPDIR")
     return Serialization.deserialize(sort(cand; by = mtime)[end])
 end
 
@@ -77,96 +71,40 @@ function panel!(ax, xs, ys, F, r, cr; rings = true, evsize = 6, compsize = 7, di
     return hm
 end
 
-"The ξ, R and ḡ of a panel, written inside it at the top left."
+"The size, R and ḡ of a panel, written inside it at the top left."
 function stamp!(ax, r, half)
-    txt = @sprintf("ξ = %.0e,  R = %.4g,  ḡ = %.4g", r.ξ, r.R, r.gbar)
+    txt = @sprintf("k = 2^%d,  ξ = %.0e,  R = %.4g,  ḡ = %.4g", round(Int, log2(r.n)), r.ξ, r.R, r.gbar)
     any(>(0), r.F) || (txt *= "\nno bound anywhere in the box")
     text!(ax, -0.94half, 0.90half; text = txt, align = (:left, :top), color = :white,
         fontsize = 11, strokecolor = RGBAf(0, 0, 0, 0.6), strokewidth = 1.6)
 end
 
-results = [(ξ, load(ξ)) for ξ in XIS]
-have = [(ξ, r) for (ξ, r) in results if r !== nothing]
-isempty(have) && error("no serialised Belousov-Zhabotinsky map found in $MAPDIR")
-
-# one colour range shared by every panel, so that the four are comparable
-allfin = Float64[]
-for (_, r) in have
-    append!(allfin, filter(isfinite, logs(r.F)))
-end
-CR = isempty(allfin) ? (0.0, 1.0) : (minimum(allfin), maximum(allfin))
-@printf("shared colour range log10 floor in [%.3f, %.3f]\n", CR...)
-
-# --- one figure per noise size ---------------------------------------------------------------------
-for (ξ, r) in have
-    zoom = haskey(r, :Fz) && any(>(0), r.Fz)
-    fig = Figure(size = zoom ? (1060, 470) : (620, 540), fontsize = 13,
-        backgroundcolor = :white)
-    ax = newaxis(fig, (1, 1))
-    hm = panel!(ax, r.xs, r.ys, r.F, r, CR)
+have = [load(t) for t in TAGS]
+fig = Figure(size = (560 * length(have), 500), fontsize = 13, backgroundcolor = :white)
+for (i, r) in enumerate(have)
+    fin = filter(isfinite, logs(r.F))
+    cr = isempty(fin) ? (0.0, 1.0) : (minimum(fin), maximum(fin))
+    ax = newaxis(fig, (1, 2i - 1))
+    hm = panel!(ax, r.xs, r.ys, r.F, r, cr)
     xlims!(ax, -r.half, r.half)
     ylims!(ax, -r.half, r.half)
     stamp!(ax, r, r.half)
-    if zoom
-        Label(fig[1, 1, TopLeft()], "a", font = :bold, color = INK, padding = (0, 6, 4, 0))
-        ax2 = newaxis(fig, (1, 2))
-        panel!(ax2, r.zxs, r.zys, r.Fz, r, CR; rings = false, evsize = 11, compsize = 12)
-        xlims!(ax2, r.zxs[1], r.zxs[end])
-        ylims!(ax2, r.zys[1], r.zys[end])
-        Label(fig[1, 2, TopLeft()], "b", font = :bold, color = INK, padding = (0, 6, 4, 0))
-        Colorbar(fig[1, 3], hm; label = "log₁₀ of the certified lower bound on σ_min(A − zI)",
-            labelcolor = INK, ticklabelcolor = MUTED, labelsize = 12, ticklabelsize = 11)
-    else
-        Colorbar(fig[1, 2], hm; label = "log₁₀ of the certified lower bound on σ_min(A − zI)",
-            labelcolor = INK, ticklabelcolor = MUTED, labelsize = 12, ticklabelsize = 11)
-    end
-    for ext in ("pdf", "png")
-        p = joinpath(FIGDIR, "map_$(tag(ξ)).$ext")
-        save(p, fig; px_per_unit = ext == "png" ? 2 : 1)
-        cp(p, joinpath(PAPERDIR, "map_$(tag(ξ)).$ext"); force = true)
-    end
-    # the ξ = 1e-1 figure keeps the name the earlier version had, so that a draft already
-    # including it does not break
-    if ξ == 1e-1
-        for ext in ("pdf", "png")
-            cp(joinpath(FIGDIR, "map_$(tag(ξ)).$ext"), joinpath(FIGDIR, "map_bz_k12.$ext");
-                force = true)
-            cp(joinpath(FIGDIR, "map_$(tag(ξ)).$ext"),
-                joinpath(PAPERDIR, "map_bz_k12.$ext"); force = true)
-        end
-    end
+    length(have) > 1 && Label(fig[1, 2i - 1, TopLeft()], string('a' + i - 1), font = :bold,
+        color = INK, padding = (0, 6, 4, 0))
+    Colorbar(fig[1, 2i], hm; label = "log₁₀ of the certified lower bound on σ_min(A − zI)",
+        labelcolor = INK, ticklabelcolor = MUTED, labelsize = 12, ticklabelsize = 11)
     bb = r.Fc .> 0
-    ra = sort([r.Fc[i] / r.Dc[i] for i in eachindex(r.Fc) if bb[i]])
-    @printf("ξ = %.0e: dim Q = %d, R = %.6g, ḡ = %.6g, box half-width %.4g, bounded %d of %d, ",
-        ξ, r.k, r.R, r.gbar, r.half, count(>(0), r.F), length(r.F))
-    @printf("count %s, %d discs; dense check %d points (%d bounded), violations %d",
-        r.count < 0 ? "none" : string(r.count), length(r.discs), length(r.Fc), count(bb),
-        r.strict)
-    isempty(ra) || @printf(", ratio min %.4f median %.4f max %.4f", ra[1], ra[cld(end, 2)],
-        ra[end])
+    ra = sort([r.Fc[j] / r.Dc[j] for j in eachindex(r.Fc) if bb[j]])
+    @printf("%s: dim Q = %d, R = %.6g, ḡ = %.6g, half-width %.4g, bounded %d of %d, count %s, %d discs",
+        r.name, r.k, r.R, r.gbar, r.half, count(>(0), r.F), length(r.F),
+        r.count < 0 ? "none" : string(r.count), length(r.discs))
+    isempty(ra) || @printf("; dense check %d points, violations %d, ratio min %.4f median %.4f",
+        length(r.Fc), r.strict, ra[1], ra[cld(end, 2)])
     println()
 end
-
-# --- the four panels side by side -------------------------------------------------------------------
-if length(have) > 1
-    fig = Figure(size = (1080, 980), fontsize = 13, backgroundcolor = :white)
-    local hm
-    for (i, (ξ, r)) in enumerate(have)
-        row, col = fld(i - 1, 2) + 1, mod(i - 1, 2) + 1
-        ax = newaxis(fig, (row, col))
-        hm = panel!(ax, r.xs, r.ys, r.F, r, CR)
-        xlims!(ax, -r.half, r.half)
-        ylims!(ax, -r.half, r.half)
-        stamp!(ax, r, r.half)
-        Label(fig[row, col, TopLeft()], string('a' + i - 1), font = :bold, color = INK,
-            padding = (0, 6, 4, 0))
-    end
-    Colorbar(fig[:, 3], hm; label = "log₁₀ of the certified lower bound on σ_min(A − zI)",
-        labelcolor = INK, ticklabelcolor = MUTED, labelsize = 12, ticklabelsize = 11)
-    for ext in ("pdf", "png")
-        p = joinpath(FIGDIR, "map_bz_family.$ext")
-        save(p, fig; px_per_unit = ext == "png" ? 2 : 1)
-        cp(p, joinpath(PAPERDIR, "map_bz_family.$ext"); force = true)
-        println("wrote ", p)
-    end
+for ext in ("pdf", "png")
+    p = joinpath(FIGDIR, "$(NAME).$ext")
+    save(p, fig; px_per_unit = ext == "png" ? 2 : 1)
+    cp(p, joinpath(PAPERDIR, "$(NAME).$ext"); force = true)
+    println("wrote ", p)
 end

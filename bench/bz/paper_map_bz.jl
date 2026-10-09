@@ -1,35 +1,33 @@
-# The exterior pseudospectrum map of the Belousov-Zhabotinsky operator A = N∘L at 2^12, at one
-# noise size ξ, on the best frame the planner can find for that ξ.
+# The exterior pseudospectrum map of the Belousov-Zhabotinsky operator A = N∘L at 2^KE cells and
+# noise ξ, on the frame that experiment 5 (bench/bz/exp5_bz.jl) certified at the radius with N
+# eigenvalues outside: R and ks are read from exp5_bz.k<KE>.xi<ξ>.<host>.csv, the frame is rebuilt
+# as there, the split certified as there (order 8, compression :full), and certify_exterior run with
+# the same cover (64 initial arcs, maxdepth 64) and the same ladder of 12 disc radii, so that the
+# discs drawn are those of the experiment.
 #
-# The frame is not fixed by hand. `plan_split` (src/planner.jl, the driver `bench/bz/plancert.jl`
-# is the same call) is run over a grid of (R, m, dim Q) in floating point; if it finds a feasible
-# point, that point is certified, and if it does not, the deepest frame on the grid is certified at
-# the radius and order with the largest margin, and the run is labelled as such. This matters at
-# the small noise sizes: a frame of dim Q = 101 gives ḡ = 1.44 at ξ = 1e-3 and 2.19 at ξ = 1e-4,
-# so the map drawn on it would be a picture of a frame too shallow for the operator.
-#
-# The box is the larger of the unit disc with a margin and a disc of radius 1.3 ḡ, chosen per
-# panel, so that the region {|z| > ḡ} where the certificate can say anything is inside the panel.
+# The box is the larger of the unit disc with a margin and a disc of radius 1.3 ḡ, so that the
+# region {|z| > ḡ} where the certificate can say anything is inside it.
 #
 # The certified lower bound on σ_min(A − zI) is evaluated on a full grid whose resolution is
 # chosen from a measurement of the cost of one point, so that the grid takes about `budget`
-# seconds; each point is one verified SVD of a dim Q × dim Q ball pencil and the cost grows like
-# dim Q³. The dense σ_min is evaluated on a coarse subgrid only, one `svdvals` of a 4096 × 4096
-# complex matrix per point, and only for Im z ≥ 0, since A is real and
+# seconds; each point is one verified SVD of a dim Q × dim Q ball pencil. The dense σ_min is
+# evaluated on a coarse subgrid only, for 2^KE <= 4096 and Im z ≥ 0, since A is real and
 # σ_min(A − z̄I) = σ_min(A − zI).
 #
-# This script only computes and serialises; the figures are drawn by `bench/draw_bz_map.jl`, which
-# runs under `bench/Project.toml` (the one with CairoMakie).
+# This script only computes and serialises, to paper_map_bz.bz_k<KE>_xi<ξ>_N<N>.<host>.jls; the
+# figures are drawn by `bench/draw_bz_map.jl`, which runs under `bench/Project.toml`.
 #
-#   OPENBLAS_NUM_THREADS=24 julia -t 24 --project=. bench/bz/paper_map_bz.jl [xi] [budget_s] [ncheck]
+#   OPENBLAS_NUM_THREADS=4 julia -t 16 --project=bench/bz bench/bz/paper_map_bz.jl xi KE N [budget_s] [ncheck]
 
 include(joinpath(@__DIR__, "bzcommon.jl"))
 using Serialization
 
 const Ξ = length(ARGS) >= 1 ? parse(Float64, ARGS[1]) : 1e-1
 const KE = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 12
-const BUDGET = length(ARGS) >= 3 ? parse(Float64, ARGS[3]) : 900.0
-const NCHECK = length(ARGS) >= 4 ? parse(Int, ARGS[4]) : 15
+const NOUT = parse(Int, ARGS[3])
+const BUDGET = length(ARGS) >= 4 ? parse(Float64, ARGS[4]) : 900.0
+const NCHECK = length(ARGS) >= 5 ? parse(Int, ARGS[5]) : 15
+const HOST = readchomp(`hostname -s`)
 const NGMIN, NGMAX = 120, 400
 
 # The dense comparison holds one k × k complex matrix and takes its singular values at every check
@@ -42,9 +40,7 @@ const MAPDIR = joinpath(homedir(), "ResearchData", "KrylovPseudospectra_Data", "
 mkpath(MAPDIR)
 
 k = 2^KE
-# a frame of ks vectors gives dim Q of about 2ks + 1, so the grid stops well below the space
-const KSS = filter(ks -> 2ks + 60 < k, [20, 50, 100, 150, 300, 600, 900, 1200])
-const TAG = "bz_k$(KE)_xi$(Ξ)"
+const TAG = "bz_k$(KE)_xi$(Ξ)_N$(NOUT)"
 
 L, _ = build_L(k)
 # `build_L` reads a cache but never writes one, and 2^12 was not cached; write it once so that the
@@ -56,40 +52,27 @@ l = noise_halfwidth(Ξ, k)
 Amul, Aadj, η, oi = make_operator(L, l)
 op = RP.LinOp(Amul, Aadj, k; epsA = 0.0, etaA = η)
 
-# --- the planning phase ----------------------------------------------------------------------------
-t_plan = @elapsed (pl = RP.plan_split(op, Amul, Aadj; kss = KSS, mmax = 16, nR = 7,
-    amargin = 1.5, Leig = 200, T = Float64))
-@printf("ξ = %.0e, l = %d: planner %d grid points, %d feasible, %d matvecs, %.1f s\n",
-    Ξ, l, length(pl.rows), length(pl.feasible), pl.nmatvec, pl.time.total)
-RP.plan_table(pl)
-
-local R, ksuse, muse, how
-if pl.best !== nothing
-    b = pl.best
-    R, ksuse, muse = b.R, b.ks, b.m
-    how = "the planner's feasible point"
-else
-    # the deepest frame on the grid, at the radius and order with the largest margin there
-    kmaxrow = maximum(r -> r.ks, pl.rows)
-    deep = [r for r in pl.rows if r.ks == kmaxrow]
-    b = sort(deep; by = r -> -r.margin)[1]
-    R, ksuse, muse = b.R, b.ks, b.m
-    how = "the deepest frame on the planner's grid (no feasible point)"
-end
-@printf("   frame: %s; R = %.10g, ks = %d, m = %d, planner dim Q = %d, margin %.4g\n",
-    how, R, ksuse, muse, b.dimQ, b.margin)
+# --- the radius and the frame of experiment 5 ----------------------------------------------------------
+exp5 = joinpath(homedir(), "ResearchData", "KrylovPseudospectra_Data", "pseudospectra", "bz_exp5",
+    "exp5_bz.k$(KE).xi$(Ξ).$(HOST).csv")
+lines = readlines(exp5)
+hdr = split(lines[1], ',')
+rows = [Dict(zip(hdr, split(x, ','))) for x in lines[2:end]]
+row = only(r for r in rows if parse(Int, r["N"]) == NOUT)
+row["cover_ok"] == "true" || error("experiment 5 did not certify N = $NOUT at 2^$KE, ξ = $Ξ")
+R = parse(Float64, row["R"])
+ksuse = parse(Int, row["ks"])
+@printf("ξ = %.0e, l = %d, N = %d: R = %.10g, ks = %d from %s\n", Ξ, l, NOUT, R, ksuse, basename(exp5))
 
 # --- the certified split at that point ---------------------------------------------------------------
-t_frame = @elapsed ((Q, finfo) = RP.two_sided_frame(Amul, Aadj, k, R; ks = ksuse,
-    Leig = pl.params.Leig, Lsv = pl.params.Lsv, droptol = pl.params.droptol, T = Float64))
-t_split = @elapsed (sc = RP.certify_split(op, Q; target = R, order = muse,
-    compression = :split))
-@printf("   certified: dim Q = %d, α ≤ %.3e, ḡ ≤ %.6g, ā ≤ %.6g, γ1 ≤ %.6g, γ2 ≤ %.6g, γ1γ2 = %.6g\n",
-    sc.k, sc.α, sc.gbar, sc.abar, sc.γ1, sc.γ2, sc.γ1 * sc.γ2)
-@printf("   R − ḡ = %.6g, the gate needs γ1γ2 < R(R − ḡ) = %.6g: %s (frame %.1f s, split %.1f s)\n",
-    R - sc.gbar, R * (R - sc.gbar), sc.γ1 * sc.γ2 < R * (R - sc.gbar), t_frame, t_split)
+t_frame = @elapsed ((Q, finfo) = RP.two_sided_frame(Amul, Aadj, k, R; ks = ksuse, Leig = 200,
+    Lsv = min(k, 2max(ksuse, 1) + 60), T = Float64))
+t_split = @elapsed (sc = RP.certify_split(op, Q; target = R, order = 8, compression = :full))
+@printf("   certified: dim Q = %d, α ≤ %.3e, ḡ ≤ %.6g, γ1 ≤ %.6g, γ2 ≤ %.6g, γ1γ2 = %.6g (frame %.1f s, split %.1f s)\n",
+    sc.k, sc.α, sc.gbar, sc.γ1, sc.γ2, sc.γ1 * sc.γ2, t_frame, t_split)
 
-t_ext = @elapsed (ext = RP.certify_exterior(sc, R; nθ = 64, maxdepth = 2, method = :svd))
+t_ext = @elapsed (ext = RP.certify_exterior(sc, R; nθ = 64, nradii = 12, maxdepth = 64,
+    method = :svd))
 discs = [(; d.center, d.radius, d.count) for d in ext.discs if isfinite(d.radius)]
 @printf("   cor:agree: hypothesis %s, region %s, count %s, %d discs, all closed %s (%.1f s)\n",
     ext.exterior.ok, ext.exterior.region_ok,
@@ -106,9 +89,9 @@ comps = [(; C.center, C.radius, C.count) for C in RP._comps(sc)]
 # --- the certified grid, at a resolution measured rather than guessed -------------------------------
 half = max(1.15, 1.3 * sc.gbar)
 probe = [half * 0.7 * cis(2π * t / 12) for t in 0:11]
-RP.resolvent_floor(sc, probe[1])
+RP.resolvent_floor(sc, probe[1]; method = :svd)
 tprobe = @elapsed for z in probe
-    RP.resolvent_floor(sc, z)
+    RP.resolvent_floor(sc, z; method = :svd)
 end
 percost = tprobe / length(probe)
 ng = clamp(round(Int, sqrt(BUDGET * Threads.nthreads() / percost)), NGMIN, NGMAX)
@@ -120,7 +103,7 @@ ys = copy(xs)
 F = zeros(ng, ng)
 t_cert = @elapsed Threads.@threads for j in 1:ng
     for i in 1:ng
-        F[i, j] = RP.resolvent_floor(sc, xs[i] + im * ys[j]).floor
+        F[i, j] = RP.resolvent_floor(sc, xs[i] + im * ys[j]; method = :svd).floor
     end
 end
 @printf("   certified grid %d × %d over [%.4g, %.4g]² in %.1f s, bounded at %d of %d points (%.4f)\n",
@@ -139,7 +122,7 @@ let off = [d for d in discs if abs(imag(d.center)) > d.radius]
         Fz = zeros(nz, nz)
         t_zoom = @elapsed Threads.@threads for j in 1:nz
             for i in 1:nz
-                Fz[i, j] = RP.resolvent_floor(sc, zxs[i] + im * zys[j]).floor
+                Fz[i, j] = RP.resolvent_floor(sc, zxs[i] + im * zys[j]; method = :svd).floor
             end
         end
         @printf("   zoom grid %d × %d about %+.7f %+.7fi, half-width %.4g, in %.1f s\n",
@@ -165,7 +148,7 @@ if DENSE
             Az[d, d] -= z
         end
         Dc[i, j] = svdvals!(Az)[end]
-        Fc[i, j] = RP.resolvent_floor(sc, z).floor
+        Fc[i, j] = RP.resolvent_floor(sc, z; method = :svd).floor
     end
 else
     ev = RP._ritz_leading(Amul, k, Float64; L = 200)
@@ -183,15 +166,13 @@ ratio = [Fc[i] / Dc[i] for i in eachindex(Fc) if bnd[i]]
     isempty(ratio) ? NaN : sort(ratio)[cld(length(ratio), 2)],
     isempty(ratio) ? NaN : maximum(ratio), t_dense)
 
-res = (; name = TAG, n = k, k = sc.k, ξ = Ξ, l, R, ks = ksuse, m = muse, how,
-    plan_best = pl.best, plan_rows = pl.rows, plan_feasible = length(pl.feasible),
-    plan_predicted = pl.predicted, nmatvec_plan = pl.nmatvec, t_plan,
+res = (; name = TAG, n = k, k = sc.k, ξ = Ξ, l, R, ks = ksuse, m = 8, N = NOUT,
     gbar = sc.gbar, abar = sc.abar, α = sc.α, γ1 = sc.γ1, γ2 = sc.γ2,
     ng, half, xs, ys, F, ev, discs, comps, percost,
     count = ext.exterior.ok ? ext.count : -1, ext_ok = ext.ok, hyp_ok = ext.exterior.ok,
     region_ok = ext.exterior.region_ok, xc, yc, Dc, Fc, strict, t_cert, t_dense, t_frame,
     t_split, t_ext, zxs, zys, Fz, zc, zhalf, t_zoom)
-let out = joinpath(MAPDIR, "map_$(TAG).$(gethostname()).jls")
+let out = joinpath(MAPDIR, "paper_map_bz.$(TAG).$(HOST).jls")
     Serialization.serialize(out, res)
     println("wrote ", out)
 end
