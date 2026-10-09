@@ -106,7 +106,7 @@ for N in gapN
     end
     @printf(io, "%d,%g,%d,%.17g,%d,%d,%.17g,%.6g,%.6g,true,%s,%.6g,%d,%d,%s,%.6g,%s,%d,%.1f\n", KE, Ξ, N, R,
         b.ks, b.sc.k, b.sc.gbar, b.sc.γ1, b.sc.γ2, string(b.e.reason), b.e.floor, ext.count,
-        length(ext.discs), ext.ok, maximum((d.radius for d in good); init = NaN), string(din),
+        length(ext.discs), ext.ok, maximum((d.radius for d in good); init = 0.0), string(din),
         length(cache), tt + td)
     @printf("   count %d (N = %d), %d discs, all closed %s, dense inside %s (%.1f s)\n", ext.count, N,
         length(ext.discs), ext.ok, string(din), td)
