@@ -20,10 +20,10 @@ bounds gives a lower bound on its value at the true quantities.
 function assembly_floor(s11::Real, s22::Real, g1::Real, g2::Real)
     s11, s22, g1, g2 = Float64(s11), Float64(s22), Float64(g1), Float64(g2)
     (s11 > 0 && s22 > 0 && g1 >= 0 && g2 >= 0) || return (0.0, false)
-    num = subd(muld(s11, s22), mulu(g1, g2))
+    num = sub_down(mul_down(s11, s22), mul_up(g1, g2))
     (num > 0 && isfinite(num)) || return (0.0, false)
-    den = addu(addu(s11, s22), addu(g1, g2))
-    f = divd(num, den)
+    den = add_up(add_up(s11, s22), add_up(g1, g2))
+    f = div_down(num, den)
     return f > 0 ? (f, true) : (0.0, false)
 end
 
@@ -37,9 +37,9 @@ Proposition prop:blockdom, eq:blockdom: if `γ1 < σ11` and `γ2 < σ22`, then
 function blockdom_floor(s11::Real, s22::Real, g1::Real, g2::Real)
     s11, s22, g1, g2 = Float64(s11), Float64(s22), Float64(g1), Float64(g2)
     (s11 > 0 && s22 > 0) || return (0.0, false)
-    τ = max(divu(g1, s11), divu(g2, s22))
+    τ = max(div_up(g1, s11), div_up(g2, s22))
     τ < 1 || return (0.0, false)
-    f = muld(min(s11, s22), subd(1.0, τ))
+    f = mul_down(min(s11, s22), sub_down(1.0, τ))
     return f > 0 ? (f, true) : (0.0, false)
 end
 
@@ -50,32 +50,8 @@ eq:farshort: `σ22(z) ≥ |z| − ḡ` when `ḡ ≥ ‖G22‖` and `|z| > ḡ`;
 or `0.0` when `|z| ≤ ḡ` cannot be excluded.
 """
 function farshort_lo(z::Number, gbar::Real)
-    v = subd(absd(z), Float64(gbar))
+    v = sub_down(abs_down(z), Float64(gbar))
     return v > 0 ? v : 0.0
-end
-
-"""
-    farpower_lo(z, ḡs) -> Float64
-
-eq:farpower (Proposition prop:power applied to G22): with `ḡs[j] ≥ ‖G22^j‖` for `j = 1:m`
-(and `ḡ_0 = 1`), `σ22(z) ≥ (|z|^m − ḡ_m)/Σ_{j<m} |z|^{m−1−j} ḡ_j` when `|z|^m > ḡ_m`. Returns the
-largest of these lower bounds over the orders supplied (each order is a valid bound on its own),
-or `0.0`. The numerator increases and the denominator increases in |z|, so the lower bound of |z|
-is used in the numerator and the upper bound in the denominator.
-"""
-function farpower_lo(z::Number, gbars::AbstractVector{<:Real})
-    zl, zu = absd(z), absu(z)
-    best = 0.0
-    for m in eachindex(gbars)
-        num = subd(powd(zl, m), Float64(gbars[m]))
-        num > 0 || continue
-        den = powu(zu, m - 1)                     # j = 0 term, ḡ_0 = 1
-        for j in 1:(m - 1)
-            den = addu(den, mulu(powu(zu, m - 1 - j), Float64(gbars[j])))
-        end
-        best = max(best, divd(num, den))
-    end
-    return best
 end
 
 """
@@ -87,7 +63,7 @@ Proposition prop:complete, eq:incl: if `R > ḡ ≥ ‖G22‖` and `ε(R − ḡ
 `s` is used throughout.
 """
 function inclusion_delta(ε::Real, R::Real, gbar::Real, g1::Real, g2::Real)
-    s = subd(Float64(R), Float64(gbar))
+    s = sub_down(Float64(R), Float64(gbar))
     s > 0 || return (0.0, false)
     return assembly_floor(Float64(ε), s, g1, g2)    # same expression with σ11 → ε, σ22 → s
 end
@@ -142,7 +118,7 @@ function check_circle(σ11lo, gbar::Real, g1::Real, g2::Real, c::Number, r::Real
     r = Float64(r)
     gbar = Float64(gbar)
     region_ok = if region === :interior
-        subd(absd(c), r) > gbar
+        sub_down(abs_down(c), r) > gbar
     elseif region === :exterior
         c == 0 && r > gbar
     else
@@ -156,8 +132,8 @@ end
 
 function _check_arcs(σ11lo, σ22lo, gbar, g1, g2, c::ComplexF64, r::Float64, arcs0; nθ, maxdepth)
     u = unit_roundoff(Float64)
-    δ = mulu(8u, addu(absu(c), r))
-    s22(z) = σ22lo === nothing ? subd(absd(z), gbar) : Float64(σ22lo(z))
+    δ = mul_up(8u, add_up(abs_up(c), r))
+    s22(z) = σ22lo === nothing ? sub_down(abs_down(z), gbar) : Float64(σ22lo(z))
     nev = 0
     vals = Dict{Float64, Tuple{Float64, Float64}}()
     ev(θ) = get!(vals, θ) do
@@ -192,9 +168,9 @@ function _check_arcs(σ11lo, σ22lo, gbar, g1, g2, c::ComplexF64, r::Float64, ar
         θa, θb, d = pop!(arcs)
         a = ev(θa)
         b = ev(θb)
-        h = addu(mulu(r, divu(subu(θb, θa), 2.0)), δ)
-        l11 = subd(min(a[1], b[1]), h)
-        l22 = subd(min(a[2], b[2]), h)
+        h = add_up(mul_up(r, div_up(sub_up(θb, θa), 2.0)), δ)
+        l11 = sub_down(min(a[1], b[1]), h)
+        l22 = sub_down(min(a[2], b[2]), h)
         f, fok = assembly_floor(l11, l22, g1, g2)
         if fok
             # only the accepted arcs enter the minima: they cover Γ, and a bisected arc's own
@@ -305,47 +281,6 @@ end
 # ------------------------------------------------------------------------------------------------
 
 """
-    circle_min(flo, c, r; nθ = 64, maxdepth = 6) -> (ok, minimum, nevals)
-
-Certified lower bound on the minimum over the circle `|z − c| = r` of a function that is
-1-Lipschitz in `z`, from a certified lower bound `flo(z)` at sample points: the same arc cover as
-[`check_circle`](@ref), with the slack `h = rΔθ/2 + δ` on each arc, and bisection (up to
-`maxdepth` times) of the arcs whose bound is not positive. `ok` means that the returned minimum is
-positive.
-"""
-function circle_min(flo, c::Number, r::Real; nθ::Int = 64, maxdepth::Int = 6)
-    c = ComplexF64(c)
-    r = Float64(r)
-    δ = mulu(8 * unit_roundoff(Float64), addu(absu(c), r))
-    nev = 0
-    vals = Dict{Float64, Float64}()
-    ev(θ) = get!(vals, θ) do
-        nev += 1
-        Float64(flo(c + r * cis(θ)))
-    end
-    arcs = [(2π * s / nθ, 2π * (s + 1) / nθ, 0) for s in 0:(nθ - 1)]
-    ok = true
-    m = Inf
-    while !isempty(arcs)
-        θa, θb, d = pop!(arcs)
-        h = addu(mulu(r, divu(subu(θb, θa), 2.0)), δ)
-        v = subd(min(ev(θa), ev(θb)), h)
-        if v > 0
-            m = min(m, v)
-        elseif d < maxdepth
-            θm = (θa + θb) / 2
-            push!(arcs, (θa, θm, d + 1))
-            push!(arcs, (θm, θb, d + 1))
-        else
-            ok = false
-            m = min(m, v)
-            break
-        end
-    end
-    return ok, (ok ? m : min(m, 0.0)), nev
-end
-
-"""
     projector_bound(floorΓ, floor0, r, e) -> (bound, M, M0, ok)
 
 Proposition prop:projector on a circle of radius `r`: with `floorΓ` a certified lower bound over
@@ -365,9 +300,9 @@ function projector_bound(floorΓ::Real, floor0::Real, r::Real, e::Real)
     floorΓ = Float64(floorΓ)
     floor0 = Float64(floor0)
     (floorΓ > 0 && floor0 > 0) || return (Inf, Inf, Inf, false)
-    M = divu(1.0, floorΓ)
-    M0 = divu(1.0, floor0)
-    return (mulu(mulu(Float64(r), mulu(M, M0)), Float64(e)), M, M0, true)
+    M = div_up(1.0, floorΓ)
+    M0 = div_up(1.0, floor0)
+    return (mul_up(mul_up(Float64(r), mul_up(M, M0)), Float64(e)), M, M0, true)
 end
 
 # ------------------------------------------------------------------------------------------------
@@ -406,25 +341,25 @@ Endpoints are rounded outward (r⁺ increases in hi, ḡ, γ̄; r₂ increases i
 """
 function selfadj_enclosure(θ::Vector{EigInterval}, gbar::Real, γbar::Real)
     gbar, γbar = Float64(gbar), Float64(γbar)
-    g2 = mulu(γbar, γbar)
-    absdiffu(a, b) = a >= b ? subu(a, b) : subu(b, a)
+    g2 = mul_up(γbar, γbar)
+    absdiffu(a, b) = a >= b ? sub_up(a, b) : sub_up(b, a)
     out = NamedTuple[]
     for side in (1, -1)
         near = gbar                                  # the region (ḡ, near] is not excluded
         for (i, J) in enumerate(θ)
             lo, hi = side == 1 ? (J.lo, J.hi) : (-J.hi, -J.lo)
             d = absdiffu(hi, gbar)
-            rp = divu(addu(addu(hi, gbar), sqrtu(addu(mulu(d, d), mulu(4.0, g2)))), 2.0)
-            dl = subd(lo, gbar)
-            disc = dl > 0 ? subd(muld(dl, dl), mulu(4.0, g2)) : -1.0
+            rp = div_up(add_up(add_up(hi, gbar), sqrt_up(add_up(mul_up(d, d), mul_up(4.0, g2)))), 2.0)
+            dl = sub_down(lo, gbar)
+            disc = dl > 0 ? sub_down(mul_down(dl, dl), mul_up(4.0, g2)) : -1.0
             if disc >= 0
-                sq = sqrtd(disc)
-                r2 = divd(addd(addd(lo, gbar), sq), 2.0)
-                r1 = divu(subu(addu(lo, gbar), sq), 2.0)
+                sq = sqrt_down(disc)
+                r2 = div_down(add_down(add_down(lo, gbar), sq), 2.0)
+                r1 = div_up(sub_up(add_up(lo, gbar), sq), 2.0)
                 near = max(near, r1)
                 push!(out, (; side, J = i, lo = side == 1 ? r2 : -rp,
                     hi = side == 1 ? rp : -r2, count = J.count,
-                    ρminus = subu(lo, r2), ρplus = subu(rp, hi)))
+                    ρminus = sub_up(lo, r2), ρplus = sub_up(rp, hi)))
             else
                 near = max(near, rp)
             end
@@ -451,13 +386,13 @@ function selfadj_count(θ::Vector{EigInterval}, gbar::Real, γbar::Real, x1::Rea
         θn = [EigInterval(-J.hi, -J.lo, J.count) for J in θ]
         return selfadj_count(θn, gbar, γbar, -x2, -x1)
     end
-    s = subd(x1, Float64(gbar))
+    s = sub_down(x1, Float64(gbar))
     s > 0 || return (0, false)
-    thr = divu(mulu(Float64(γbar), Float64(γbar)), s)
+    thr = div_up(mul_up(Float64(γbar), Float64(γbar)), s)
     cnt = 0
     for J in θ
         for x in (x1, x2)
-            d = x < J.lo ? subd(J.lo, x) : x > J.hi ? subd(x, J.hi) : 0.0
+            d = x < J.lo ? sub_down(J.lo, x) : x > J.hi ? sub_down(x, J.hi) : 0.0
             d > thr || return (0, false)
         end
         (J.lo > x1 && J.hi < x2) && (cnt += J.count)
@@ -487,7 +422,7 @@ function weyl_pairing(θ::Vector{EigInterval}, gbar::Real, γbar::Real, n::Integ
         J.lo > gbar || break
         for _ in 1:(J.count)
             i += 1
-            push!(top, (; i, lo = subd(J.lo, γbar), hi = addu(J.hi, γbar)))
+            push!(top, (; i, lo = sub_down(J.lo, γbar), hi = add_up(J.hi, γbar)))
         end
     end
     jplus = i
@@ -498,10 +433,10 @@ function weyl_pairing(θ::Vector{EigInterval}, gbar::Real, γbar::Real, n::Integ
         J.hi < -gbar || break
         for _ in 1:(J.count)
             i += 1
-            push!(bottom, (; i = n + 1 - i, lo = subd(J.lo, γbar), hi = addu(J.hi, γbar)))
+            push!(bottom, (; i = n + 1 - i, lo = sub_down(J.lo, γbar), hi = add_up(J.hi, γbar)))
         end
     end
     jminus = i
     return (; ok = true, top, bottom, jplus, jminus,
-        top_rest = addu(gbar, γbar), bottom_rest = subd(-gbar, γbar))
+        top_rest = add_up(gbar, γbar), bottom_rest = sub_down(-gbar, γbar))
 end

@@ -40,25 +40,28 @@ struct FrameData
     time::Float64
 end
 
-aff(c::NTuple{2, Float64}, a::Real) = addu(c[1], mulu(c[2], Float64(a)))
+aff(c::NTuple{2, Float64}, a::Real) = add_up(c[1], mul_up(c[2], Float64(a)))
+
+# The singular value enclosure behind every spectral norm here, named rather than left to `svdbox`'s
+# `:auto` so that a change of default in BallArithmetic cannot change what the paper's numbers mean:
+# Miyajima's Theorem 10 on mid(B), widened by ‖rad(B)‖₂ through Weyl's inequality (thm:svdbox).
+const SVD_METHOD = :miyajima2014_thm10_weyl
 
 "Upper bound on ‖C‖ for a tall ball matrix C by eq:gram (`:gram`) or by svdbox of C (`:direct`)."
 function _tall_norm_up(C::BallMatrix, coupling::Symbol)
     size(C, 2) == 0 && return 0.0
     if coupling === :direct
-        return min(sigmax_up(C), frobenius_up(C))
+        return min(svd_bound_L2_opnorm(C; method = SVD_METHOD), upper_bound_frobenius(C))
     end
-    Gm = _bmul(BallMatrix(Matrix(mid(C)'), Matrix(rad(C)')), C)
-    return min(sqrtu(opnorm_up(Gm)), frobenius_up(C))
+    Gm = BallMatrix(Matrix(mid(C)'), Matrix(rad(C)')) * C
+    return min(sqrt_up(upper_bound_L2_opnorm(Gm; svd = true)), upper_bound_frobenius(C))
 end
 
 "α ≥ ‖I − Q*Q‖ and the ball Q*Q."
 function frame_alpha(Q::AbstractMatrix)
     k = size(Q, 2)
-    Qb = BallMatrix(Matrix(Q))
-    Mq = _bmul(BallMatrix(Matrix(Q')), Qb)
-    E = _bsub(Mq, Matrix{ComplexF64}(I, k, k))
-    α = k == 0 ? 0.0 : opnorm_up(E)
+    Mq = BallMatrix(Matrix(Q')) * BallMatrix(Matrix(Q))
+    α = k == 0 ? 0.0 : upper_bound_L2_opnorm(Mq - I; svd = true)
     return α, Mq
 end
 
@@ -76,59 +79,37 @@ function frame_data(op::LinOp, Q::AbstractMatrix; coupling::Symbol = :gram)
     all(isfinite, Q) || error("frame has non-finite entries")
     α, Mq = frame_alpha(Q)
     α < 1 || error("the frame is not certified to have full rank: α = $α ≥ 1")
-    qF = frobenius_up(Q)
+    qF = upper_bound_frobenius(BallMatrix(Matrix(Q)))
     Qb = BallMatrix(Matrix(Q))
     Qh = BallMatrix(Matrix(Q'))
     if op.stored !== nothing
         A = op.stored
-        X = _bmul_op(A, Qb)
-        Xt = _bmul_op(adjoint(A), Qb)
+        X = _materialise(A) * Qb
+        Xt = _materialise(adjoint(A)) * Qb
         rho = (0.0, 0.0)
         e0, e1 = 0.0, 0.0
     else
         X = BallMatrix(apply_cols(op, Q, false))
         Xt = BallMatrix(apply_cols(op, Q, true))
         # ‖X − AQ‖ ≤ ε_A a ‖Q‖_F + √k η_A
-        e0 = mulu(sqrtu(Float64(k)), op.etaA)
-        e1 = mulu(op.epsA, qF)
-        sq = sqrtu(addu(1.0, α))                 # ‖Q‖ ≤ √(1 + α)
-        rho = (mulu(sq, e0), mulu(sq, e1))       # every entry of Q*(AQ − X) is at most its norm
+        e0 = mul_up(sqrt_up(Float64(k)), op.etaA)
+        e1 = mul_up(op.epsA, qF)
+        sq = sqrt_up(add_up(1.0, α))                 # ‖Q‖ ≤ √(1 + α)
+        rho = (mul_up(sq, e0), mul_up(sq, e1))       # every entry of Q*(AQ − X) is at most its norm
     end
-    Gt = _bmul(Qh, X)
-    C = _bsub(X, _bmul(Qb, Gt))                  # (I − QQ*) A Q
-    D = _bsub(Xt, _bmul(Qb, _bmul(Qh, Xt)))      # (I − QQ*) A* Q
-    γ2 = (addu(_tall_norm_up(C, coupling), e0), e1)
-    γ1 = (addu(_tall_norm_up(D, coupling), e0), e1)
-    s = (addu(opnorm_up(Gt), rho[1]), rho[2])
+    Gt = Qh * X
+    C = X - Qb * Gt                              # (I − QQ*) A Q
+    D = Xt - Qb * (Qh * Xt)                      # (I − QQ*) A* Q
+    γ2 = (add_up(_tall_norm_up(C, coupling), e0), e1)
+    γ1 = (add_up(_tall_norm_up(D, coupling), e0), e1)
+    s = (add_up(upper_bound_L2_opnorm(Gt; svd = true), rho[1]), rho[2])
     return FrameData(n, k, α, Gt, Mq, rho, s, γ1, γ2, qF, op.stored !== nothing, coupling,
         time() - t0)
 end
 
-# Ball product of a stored (dense or sparse, possibly adjoint) matrix with a ball matrix.
-function _bmul_op(A, B::BallMatrix)
-    As = A isa Adjoint ? (parent(A) isa SparseMatrixCSC ? sparse(A) : Matrix(A)) : A
-    TA = eltype(As)
-    TB = eltype(mid(B))
-    if TA <: Real && TB <: Real
-        return As * B
-    elseif TA <: Real
-        # real matrix times complex ball: real and imaginary parts separately
-        Re = As * BallMatrix(real.(mid(B)), rad(B))
-        Im = As * BallMatrix(imag.(mid(B)), rad(B))
-        return BallMatrix(complex.(mid(Re), mid(Im)), _radsum(rad(Re), rad(Im)))
-    else
-        Ar = real.(As)
-        Ai = imag.(As)
-        Bc = _promote_ball(B)
-        Br = BallMatrix(real.(mid(Bc)), rad(Bc))
-        Bi = BallMatrix(imag.(mid(Bc)), rad(Bc))
-        Re = _bsub_real(Ar * Br, Ai * Bi)
-        Im = Ar * Bi + Ai * Br
-        return BallMatrix(complex.(mid(Re), mid(Im)), _radsum(rad(Re), rad(Im)))
-    end
-end
-_radsum(a, b) = [addu(Float64(x), Float64(y)) for (x, y) in zip(a, b)] |> v -> reshape(v, size(a))
-_bsub_real(A::BallMatrix, B::BallMatrix) = A - B
+# the adjoint of a stored matrix as a matrix of its own, sparse when the original is: the ball
+# products take the midpoint and its modulus, which a lazy adjoint of a sparse matrix does not keep
+_materialise(A) = A isa Adjoint ? (parent(A) isa SparseMatrixCSC ? sparse(A) : Matrix(A)) : A
 
 """
     isometry_bounds(fd::FrameData, a) -> (s, γ1, γ2)
@@ -138,16 +119,16 @@ Bounds for the isometry Z of the polar decomposition, valid whenever ‖A‖ ≤
 (proof of prop:almostortho).
 """
 function isometry_bounds(fd::FrameData, a::Real)
-    oma = subd(1.0, fd.α)
-    soma = sqrtd(oma)
-    return (divu(aff(fd.s, a), oma), divu(aff(fd.γ1Q, a), soma), divu(aff(fd.γ2Q, a), soma))
+    oma = sub_down(1.0, fd.α)
+    soma = sqrt_down(oma)
+    return (div_up(aff(fd.s, a), oma), div_up(aff(fd.γ1Q, a), soma), div_up(aff(fd.γ2Q, a), soma))
 end
 
 "Affine coefficients of the isometry bounds, each coefficient divided by the α factor."
 function isometry_affine(fd::FrameData)
-    oma = subd(1.0, fd.α)
-    soma = sqrtd(oma)
-    d(c, x) = (divu(c[1], x), divu(c[2], x))
+    oma = sub_down(1.0, fd.α)
+    soma = sqrt_down(oma)
+    d(c, x) = (div_up(c[1], x), div_up(c[2], x))
     return (d(fd.s, oma), d(fd.γ1Q, soma), d(fd.γ2Q, soma))
 end
 
@@ -160,5 +141,5 @@ function compression_ball(fd::FrameData, a::Real)
     ρ = aff(fd.rhoG, a)
     ρ == 0 && return fd.Gt
     R = rad(fd.Gt)
-    return BallMatrix(Matrix(mid(fd.Gt)), [addu(Float64(x), ρ) for x in R])
+    return BallMatrix(Matrix(mid(fd.Gt)), [add_up(Float64(x), ρ) for x in R])
 end

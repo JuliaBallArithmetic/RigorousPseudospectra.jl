@@ -33,12 +33,12 @@ eq:epsP: `‖fl(y − Q fl(Q*y)) − P⊥y‖ ≤ ε_P ‖y‖` with
 function epsP_up(α::Real, n::Integer, k::Integer, T::Type = Float64)
     u = unit_roundoff(Float64)
     k == 0 && return u
-    un = gammau(n, T)
-    uk = gammau(k, T)
-    sk = sqrtu(Float64(k))
-    inner = addu(un, mulu(uk, addu(1.0, mulu(sk, un))))
-    t = mulu(mulu(mulu(addu(1.0, u), addu(1.0, Float64(α))), sk), inner)
-    return addu(addu(Float64(α), u), t)
+    un = gamma_bound(n, T)
+    uk = gamma_bound(k, T)
+    sk = sqrt_up(Float64(k))
+    inner = add_up(un, mul_up(uk, add_up(1.0, mul_up(sk, un))))
+    t = mul_up(mul_up(mul_up(add_up(1.0, u), add_up(1.0, Float64(α))), sk), inner)
+    return add_up(add_up(Float64(α), u), t)
 end
 
 """
@@ -51,11 +51,11 @@ in the subnormal range.
 """
 function etaP_up(n::Integer, k::Integer, T::Type = Float64)
     k == 0 && return 0.0
-    η = eta_min(Float64)
+    η = subnormal_min(Float64)
     c = T <: Complex ? 4.0 : 1.0
-    a = mulu(mulu(sqrtu(2.0), sqrtu(Float64(k))), mulu(Float64(n), c * η))
-    b = mulu(sqrtu(Float64(n)), mulu(Float64(k), c * η))
-    return addu(a, b)
+    a = mul_up(mul_up(sqrt_up(2.0), sqrt_up(Float64(k))), mul_up(Float64(n), c * η))
+    b = mul_up(sqrt_up(Float64(n)), mul_up(Float64(k), c * η))
+    return add_up(a, b)
 end
 
 """
@@ -69,16 +69,16 @@ constants for `B` and for `B*` (γ1 and γ2 exchanged), and
 (zero when η_A = η_P = 0, the paper's case).
 """
 function onestep_up(a, g, γ1, γ2, εA, ηA, εP, ηP)
-    hyp(x, y) = sqrtu(addu(mulu(x, x), mulu(y, y)))
-    opP = addu(1.0, εP)
+    hyp(x, y) = abs_up(complex(x, y))
+    opP = add_up(1.0, εP)
     function one(gl, gr)            # gl couples through P⊥A, gr through AP⊥
-        t1 = mulu(εP, hyp(gl, g))
-        t2 = mulu(mulu(εA, a), opP)
-        t3 = mulu(εP, addu(hyp(gr, g), mulu(a, addu(εP, mulu(εA, opP)))))
-        ε = addu(addu(t1, t2), t3)
-        aηP = mulu(a, ηP)
-        η = addu(addu(addu(mulu(hyp(gl, g), ηP), mulu(εA, aηP)), ηA),
-            addu(mulu(εP, addu(addu(aηP, mulu(εA, aηP)), ηA)), ηP))
+        t1 = mul_up(εP, hyp(gl, g))
+        t2 = mul_up(mul_up(εA, a), opP)
+        t3 = mul_up(εP, add_up(hyp(gr, g), mul_up(a, add_up(εP, mul_up(εA, opP)))))
+        ε = add_up(add_up(t1, t2), t3)
+        aηP = mul_up(a, ηP)
+        η = add_up(add_up(add_up(mul_up(hyp(gl, g), ηP), mul_up(εA, aηP)), ηA),
+            add_up(mul_up(εP, add_up(add_up(aηP, mul_up(εA, aηP)), ηA)), ηP))
         return ε, η
     end
     e1, h1 = one(γ2, γ1)            # B
@@ -163,13 +163,13 @@ function trace_sweep(op::LinOp, Q::AbstractMatrix, m::Integer; scale::Real = 1.0
     T = promote_type(op.T, eltype(Q)) <: Complex ? ComplexF64 : Float64
     Qm = Matrix{T}(Q)
     scale = Float64(scale)
-    η = eta_min(Float64)
-    γsq = gammau(n, T)
-    γl1 = gammau(n + 2, T)
-    onemsq = subd(1.0, γsq)
-    oneml1 = subd(1.0, γl1)
-    ηsq = mulu(2.0 * n, η)
-    ηl1 = mulu(Float64(n), η)
+    η = subnormal_min(Float64)
+    γsq = gamma_bound(n, T)
+    γl1 = gamma_bound(n + 2, T)
+    onemsq = sub_down(1.0, γsq)
+    oneml1 = sub_down(1.0, γl1)
+    ηsq = mul_up(2.0 * n, η)
+    ηl1 = mul_up(Float64(n), η)
     cols = collect(cols)
     b = Int(blocksize)
     nb = cld(length(cols), b)
@@ -227,13 +227,13 @@ function trace_sweep(op::LinOp, Q::AbstractMatrix, m::Integer; scale::Real = 1.0
                             s1 += abs(x)
                         end
                         fin &= isfinite(ss)
-                        ν[c, s + 1] = sqrtu(addu(divu(ss, onemsq), ηsq))
+                        ν[c, s + 1] = sqrt_up(add_up(div_up(ss, onemsq), ηsq))
                         fp[s] += ss
                         # the ℓ¹ and ℓ∞ sums at every order, not only the first: the column sums
                         # give ‖B^s‖₁ and the accumulated row sums give ‖B^s‖_∞, whose geometric
                         # mean bounds ‖B^s‖₂ and is far below the Frobenius norm for a sparse or
                         # banded block
-                        N1[s] = max(N1[s], addu(divu(s1, oneml1), ηl1))
+                        N1[s] = max(N1[s], add_up(div_up(s1, oneml1), ηl1))
                         N1fp[s] = max(N1fp[s], s1)
                         @inbounds for r in 1:n
                             acc[r, s] += abs(nxt[r, c])
@@ -243,9 +243,9 @@ function trace_sweep(op::LinOp, Q::AbstractMatrix, m::Integer; scale::Real = 1.0
                 end
                 for c in 1:bJ
                     for s in 1:(m + 1)
-                        Σν[s] = addu(Σν[s], ν[c, s])
+                        Σν[s] = add_up(Σν[s], ν[c, s])
                         for s2 in 1:(m + 1)
-                            Γ[s, s2] = addu(Γ[s, s2], mulu(ν[c, s], ν[c, s2]))
+                            Γ[s, s2] = add_up(Γ[s, s2], mul_up(ν[c, s], ν[c, s2]))
                         end
                     end
                 end
@@ -264,8 +264,8 @@ function trace_sweep(op::LinOp, Q::AbstractMatrix, m::Integer; scale::Real = 1.0
     fin = true
     nmv = 0
     for r in results
-        Γ .= addu.(Γ, r.Γ)
-        Σν .= addu.(Σν, r.Σν)
+        Γ .= add_up.(Γ, r.Γ)
+        Σν .= add_up.(Σν, r.Σν)
         fp .+= r.fp
         acc .+= r.acc
         N1s .= max.(N1s, r.N1)
@@ -274,7 +274,7 @@ function trace_sweep(op::LinOp, Q::AbstractMatrix, m::Integer; scale::Real = 1.0
         nmv += r.nmv
     end
     Ninffps = [n == 0 ? 0.0 : maximum(view(acc, :, s)) for s in 1:m]
-    Ninfs = [addu(divu(x, oneml1), ηl1) for x in Ninffps]
+    Ninfs = [add_up(div_up(x, oneml1), ηl1) for x in Ninffps]
     N1 = m == 0 ? 0.0 : N1s[1]
     Ninf = m == 0 ? 0.0 : Ninfs[1]
     N1fp = m == 0 ? 0.0 : N1fps[1]
@@ -294,23 +294,23 @@ function F_up(S::SweepSums, t::Int, εB, ηB, g)
     w = zeros(t + 1)
     w[t + 1] = 1.0
     for s in 0:(t - 1)
-        w[s + 1] = mulu(εB, powu(g, t - 1 - s))
+        w[s + 1] = mul_up(εB, pow_up(g, t - 1 - s))
     end
     q = 0.0
     for s in 1:(t + 1), s2 in 1:(t + 1)
-        q = addu(q, mulu(mulu(w[s], w[s2]), S.Γ[s, s2]))
+        q = add_up(q, mul_up(mul_up(w[s], w[s2]), S.Γ[s, s2]))
     end
     if ηB > 0
         St = 0.0
         for d in 0:(t - 1)
-            St = addu(St, powu(g, d))
+            St = add_up(St, pow_up(g, d))
         end
-        h = mulu(ηB, St)
+        h = mul_up(ηB, St)
         lin = 0.0
         for s in 1:(t + 1)
-            lin = addu(lin, mulu(w[s], S.Σν[s]))
+            lin = add_up(lin, mul_up(w[s], S.Σν[s]))
         end
-        q = addu(q, addu(mulu(mulu(2.0, h), lin), mulu(Float64(S.n), mulu(h, h))))
+        q = add_up(q, add_up(mul_up(mul_up(2.0, h), lin), mul_up(Float64(S.n), mul_up(h, h))))
     end
     return q
 end
@@ -322,27 +322,27 @@ question. Returns `Inf` when the order was not accumulated.
 """
 function I_up(S::SweepSums, t::Int, εB, ηB)
     (1 <= t <= length(S.N1s)) || return Inf
-    e = addu(εB, ηB)
-    return mulu(addu(S.N1s[t], mulu(sqrtu(Float64(S.n)), e)),
-        addu(S.Ninfs[t], mulu(Float64(S.n), e)))
+    e = add_up(εB, ηB)
+    return mul_up(add_up(S.N1s[t], mul_up(sqrt_up(Float64(S.n)), e)),
+        add_up(S.Ninfs[t], mul_up(Float64(S.n), e)))
 end
 
 "Upper bound of I(g) of eq:FI."
 function I_up(S::SweepSums, εB, ηB)
-    e = addu(εB, ηB)
-    return mulu(addu(S.N1, mulu(sqrtu(Float64(S.n)), e)), addu(S.Ninf, mulu(Float64(S.n), e)))
+    e = add_up(εB, ηB)
+    return mul_up(add_up(S.N1, mul_up(sqrt_up(Float64(S.n)), e)), add_up(S.Ninf, mul_up(Float64(S.n), e)))
 end
 
 "Upper bound on the spectral norm of the nonnegative 2×2 matrix [s γ1; γ2 g]."
 function norm2x2_up(s, γ1, γ2, g)
-    Pu = addu(mulu(s, s), mulu(γ2, γ2))
-    Pd = addd(muld(s, s), muld(γ2, γ2))
-    Ru = addu(mulu(γ1, γ1), mulu(g, g))
-    Rd = addd(muld(γ1, γ1), muld(g, g))
-    Qo = addu(mulu(s, γ1), mulu(γ2, g))
-    h = divu(max(subu(Pu, Rd), subu(Ru, Pd), 0.0), 2.0)
-    λ = addu(divu(addu(Pu, Ru), 2.0), sqrtu(addu(mulu(h, h), mulu(Qo, Qo))))
-    return sqrtu(λ)
+    Pu = add_up(mul_up(s, s), mul_up(γ2, γ2))
+    Pd = add_down(mul_down(s, s), mul_down(γ2, γ2))
+    Ru = add_up(mul_up(γ1, γ1), mul_up(g, g))
+    Rd = add_down(mul_down(γ1, γ1), mul_down(g, g))
+    Qo = add_up(mul_up(s, γ1), mul_up(γ2, g))
+    h = div_up(max(sub_up(Pu, Rd), sub_up(Ru, Pd), 0.0), 2.0)
+    λ = add_up(div_up(add_up(Pu, Ru), 2.0), sqrt_up(add_up(mul_up(h, h), mul_up(Qo, Qo))))
+    return sqrt_up(λ)
 end
 
 """
@@ -375,13 +375,13 @@ check_ii(D::FPCheckData, a, g) = norm2x2_up(aff(D.s, a), aff(D.γ1, a), aff(D.γ
 "(i), trace half, order t: F_t(g) < g^{2t}."
 function check_iF(D::FPCheckData, t::Int, a, g)
     εB, ηB = _consts(D, a, g)
-    return F_up(D.S, t, εB, ηB, g) < powd(g, 2t)
+    return F_up(D.S, t, εB, ηB, g) < pow_down(g, 2t)
 end
 
 "(i), interpolation half: I(g) < g²."
 function check_iI(D::FPCheckData, a, g)
     εB, ηB = _consts(D, a, g)
-    return I_up(D.S, εB, ηB) < muld(g, g)
+    return I_up(D.S, εB, ηB) < mul_down(g, g)
 end
 
 "Least `a` (by bisection) passing (ii) at `g`; `NaN` if none is found."
@@ -523,7 +523,6 @@ struct FarBlockCertificate
     epsB::Float64
     etaB::Float64
     epsP::Float64
-    gbars_power::Vector{Float64}
     sums::SweepSums
     nmatvec::Int
     time_estimate::Float64
@@ -593,9 +592,9 @@ function certify_far_block(op::LinOp, Q::AbstractMatrix, fd::FrameData;
     # constants in the units of the scaled operator c·A
     εP = epsP_up(fd.α, n, k, T)
     ηP = etaP_up(n, k, T)
-    ηA = addu(mulu(c, op.etaA), mulu(sqrtu(Float64(n)), eta_min(Float64)))
+    ηA = add_up(mul_up(c, op.etaA), mul_up(sqrt_up(Float64(n)), subnormal_min(Float64)))
     sa, g1a, g2a = isometry_affine(fd)
-    sc(x) = (mulu(c, x[1]), x[2])
+    sc(x) = (mul_up(c, x[1]), x[2])
     D = FPCheckData(S, sc(sa), sc(g1a), sc(g2a), op.epsA, ηA, εP, ηP)
     gt = fill(NaN, m)
     at = fill(NaN, m)
@@ -608,7 +607,7 @@ function certify_far_block(op::LinOp, Q::AbstractMatrix, fd::FrameData;
             gt[t], at[t] = least_g(D, (a, g) -> check_iF(D, t, a, g), trfp[t])
             # the interpolation half at the same order: ‖B^t‖₂ ≤ sqrt(‖B^t‖₁‖B^t‖_∞) < g^t
             git[t], ait[t] = least_g(D, (a, g) -> I_up(D.S, t, _consts(D, a, g)...) <
-                                                  powd(g, 2t), sqrt(S.N1fps[t] * S.Ninffps[t]))
+                                                  pow_down(g, 2t), sqrt(S.N1fps[t] * S.Ninffps[t]))
         end
         gi, ai = least_g(D, (a, g) -> check_iI(D, a, g), ipfp)
     else
@@ -620,28 +619,13 @@ function certify_far_block(op::LinOp, Q::AbstractMatrix, fd::FrameData;
     tc = time() - tc
     if isempty(cands)
         return FarBlockCertificate(false, Inf, Inf, m, :none, 0, gt ./ c, at ./ c, NaN, NaN,
-            trfp ./ c, ipfp / c, est, c, NaN, NaN, εP, Float64[], S,
+            trfp ./ c, ipfp / c, est, c, NaN, NaN, εP, S,
             S.nmatvec + m * nsamples, te, S.time, tc)
     end
     g, a, which, t = cands[argmin(first.(cands))]
     εB, ηB = _consts(D, a, g)
-    unscale(x) = isfinite(x) ? divu(x, c) : x
-    # The vector eq:farpower consumes, from the same sweep and at no further cost. `F_up` bounds
-    # Σ_i‖B^j e_i‖² with the rounding allowances of the certified pair, so its square root bounds
-    # ‖B^j‖_F and hence ‖B^j‖. Without it farpower_lo has nothing to work with and σ22 is always
-    # the order-one form |z| − ḡ, which is the weaker of the two whenever the far block is
-    # non-normal enough for its powers to decay.
-    gp = Float64[]
-    if S.finite
-        for j in 1:m
-            fj = F_up(S, j, εB, ηB, g)            # Frobenius, loose by up to sqrt(rank)
-            ij = I_up(S, j, εB, ηB)               # interpolation, sharp when B^j is sparse
-            bj = min(isfinite(fj) && fj >= 0 ? fj : Inf, isfinite(ij) && ij >= 0 ? ij : Inf)
-            isfinite(bj) || break
-            push!(gp, divu(sqrtu(bj), powd(c, j)))
-        end
-    end
+    unscale(x) = isfinite(x) ? div_up(x, c) : x
     return FarBlockCertificate(true, unscale(g), unscale(a), m, which, t, unscale.(gt),
-        unscale.(at), unscale(gi), unscale(ai), trfp ./ c, ipfp / c, est, c, εB, divu(ηB, c),
-        εP, gp, S, S.nmatvec + m * nsamples, te, S.time, tc)
+        unscale.(at), unscale(gi), unscale(ai), trfp ./ c, ipfp / c, est, c, εB, div_up(ηB, c),
+        εP, S, S.nmatvec + m * nsamples, te, S.time, tc)
 end

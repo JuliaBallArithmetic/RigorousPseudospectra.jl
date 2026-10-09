@@ -13,7 +13,7 @@
 # For a stored matrix with at most w nonzeros in each row and in each column, every entry of fl(Ay)
 # is an inner product of length ≤ w, so |fl(Ay) − Ay| ≤ γ_w |A||y| + wη componentwise, and
 # ‖|A|‖ ≤ √(‖A‖₁‖A‖∞) ≤ √w ‖A‖, whence ε_A = √w γ_w (the paper's √w u_w) and η_A = √n wη. For
-# complex data γ_{w+2} (see `gammau`); the absolute term is taken as 4wη per entry in all cases.
+# complex data γ_{w+2} (see `gamma_bound`); the absolute term is taken as 4wη per entry in all cases.
 
 """
     LinOp
@@ -35,9 +35,9 @@ struct LinOp{FM, FA}
 end
 
 function _eta_stored(n, w, T)
-    η = eta_min(Float64)
+    η = subnormal_min(Float64)
     c = 4.0                          # covers complex data and a real matrix applied to complex vectors
-    return mulu(sqrtu(Float64(n)), mulu(c * w, η))
+    return mul_up(sqrt_up(Float64(n)), mul_up(c * w, η))
 end
 
 "Maximum number of nonzeros in a row or a column."
@@ -63,7 +63,7 @@ function LinOp(A::AbstractMatrix; T::DataType = (eltype(A) <: Complex ? ComplexF
     size(A, 2) == n || error("square operator expected")
     As = A isa SparseMatrixCSC ? dropzeros(A) : Matrix(A)
     w = max(1, _stencil_width(As))
-    epsA = mulu(sqrtu(Float64(w)), gammau(w, T))
+    epsA = mul_up(sqrt_up(Float64(w)), gamma_bound(w, T))
     etaA = _eta_stored(n, w, T)
     Ast = As isa SparseMatrixCSC ? sparse(adjoint(As)) : Matrix(adjoint(As))
     m!(Y, X) = mul!(Y, As, X)
