@@ -15,8 +15,15 @@
 #
 # and along X + t(G − X), t ∈ [0, 1], no eigenvalue crosses a contour Γ on which
 # σ_min(X − zI) > η_α. The cover of the contour certifies σ11 = σ_min(X − zI) from below on all of
-# Γ (`check.minσ11`), so a count read off `verifyeigall` on G is a count for X whenever
-# `check.minσ11 > η_α`.
+# Γ (`check.minσ11`).
+#
+# The eigenvalues are enclosed for the midpoint Ĝ = mid(G), not for the ball: for an operator
+# applied matrix-free the radius of G is a norm bound on the rounding of fl(AQ) spread over every
+# entry, and carried through the eigenvector matrix it can exceed the separation of eigenvalues the
+# count never needs to separate (on the BZ compression of experiment 5, k = 94: radius 1.9e-9 per
+# entry, 4e-2 per row after the transformation, 7 of 72 clusters certified on G against all 94 on
+# Ĝ). Since ‖Ĝ − Q*AQ‖ ≤ ‖rad(G)‖₂ =: ρ, the count read off Ĝ is a count for X whenever
+# `check.minσ11 > η_α + ρ`, which is `etaG`.
 
 """
     SplitCertificate
@@ -27,8 +34,8 @@ Everything certified for one operator and one frame `Q` (n×k):
 * `gbar > ‖G22‖` and `abar > ‖A‖` (prop:fpchecks), or supplied by the caller (`far = nothing`);
 * `γ1 ≥ ‖G12‖`, `γ2 ≥ ‖G21‖`, `snorm ≥ ‖G11‖` for the isometry Z of the polar decomposition
   `Q = ZS` (the factors of prop:almostortho already applied);
-* `comp`, the inclusions of the eigenvalues of G by `verifyeigall`, or `nothing`;
-* `etaG ≥ ‖G − Z*AZ‖`, the homotopy bound of the header.
+* `comp`, the inclusions of the eigenvalues of the midpoint of G by `verifyeigall`, or `nothing`;
+* `etaG ≥ ‖mid(G) − Z*AZ‖`, the homotopy bound of the header.
 """
 struct SplitCertificate
     n::Int
@@ -95,10 +102,12 @@ function certify_split(op::LinOp, Q::AbstractMatrix; order = :auto, compression 
     comp = nothing
     etaG = Inf
     if full && isfinite(abar) && size(Q, 2) > 0
-        comp = verifyeigall(_complex_ball(G))
+        comp = verifyeigall(_complex_ball(BallMatrix(Matrix(mid(G)))))
         α = fd.α
-        etaG = div_up(mul_up(mul_up(α, add_up(1.0, sqrt_up(add_up(1.0, α)))),
+        ηα = div_up(mul_up(mul_up(α, add_up(1.0, sqrt_up(add_up(1.0, α)))),
                 upper_bound_L2_opnorm(G; svd = true)), sub_down(1.0, α))
+        ρ = upper_bound_L2_opnorm(BallMatrix(Matrix{Float64}(rad(G))); svd = true)
+        etaG = add_up(ηα, ρ)
     end
     t3 = time()
     return SplitCertificate(size(Q, 1), size(Q, 2), Matrix(Q), fd.α, G, fd.Mq, gbar, abar,
