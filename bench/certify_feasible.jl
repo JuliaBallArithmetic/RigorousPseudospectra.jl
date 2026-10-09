@@ -21,6 +21,9 @@
 # frames/certify_feasible.<op>.<method>.N<N>.<host>.jld2. With REPLAY=1 the search is skipped: the
 # radii and ks are read back from this script's own earlier output (same tag) and only the frame
 # reported there is rebuilt, certified and saved, the numbers going to a file tagged .replay.
+# With RERUN=N1,N2,... the full search is run again at those radii only (no sampling or sharding),
+# for the radii where a replay did not reproduce the frame, to a file tagged .rerun; its frames
+# replace those of the replay.
 #
 #   JULIA_NUM_THREADS=2 OPENBLAS_NUM_THREADS=8 julia --project=bench bench/certify_feasible.jl names [method]
 using RigorousPseudospectra, LinearAlgebra, Printf
@@ -38,6 +41,7 @@ SHARD = get(ENV, "SHARD", "")
 shard_i, shard_S = isempty(SHARD) ? (0, 1) : parse.(Int, split(SHARD, "/"))
 tag = (NSAMPLE > 0 ? ".sampled" : "") * (shard_S > 1 ? ".s$(shard_i)of$(shard_S)" : "")
 REPLAY = get(ENV, "REPLAY", "0") == "1"
+RERUN = haskey(ENV, "RERUN") ? Set(parse.(Int, split(ENV["RERUN"], ","))) : nothing
 const FRAMES = joinpath(DIR, "frames")
 
 function evaluate(o, op, A, n, R, ks, method)
@@ -48,6 +52,8 @@ function evaluate(o, op, A, n, R, ks, method)
     return (; ks, d = sc.k, gbar = sc.gbar, γ1 = sc.γ1, γ2 = sc.γ2, ok = e.ok && e.region_ok,
         e, cnt, cok, sc, t = tf + tc + tv)
 end
+
+readrows_all(files) = [r for f in files for r in readrows(joinpath(DIR, f))]
 
 function readrows(path)
     lines = readlines(path)
@@ -71,12 +77,18 @@ for nm in names
             log(length(high)); length = NSAMPLE))), 1, length(high))])
         rows = vcat(low, pick)
     end
-    REPLAY || (rows = rows[(shard_i + 1):shard_S:end])
+    if RERUN !== nothing
+        rows = [r for r in readrows_all(files) if r["status"] == "found" && parse(Int, r["N"]) in RERUN]
+        sort!(unique!(r -> r["N"], rows); by = r -> parse(Int, r["N"]))
+    elseif !REPLAY
+        rows = rows[(shard_i + 1):shard_S:end]
+    end
     o = ps_operator(name)
     op = LinOp(o.A)
     A = Matrix(o.A)
     n = size(A, 1)
-    io = open(joinpath(DIR, "certify_feasible.$(name).$(method)$(tag)$(REPLAY ? ".replay" : "").$(HOST).csv"), "w")
+    suffix = RERUN !== nothing ? ".rerun" : REPLAY ? ".replay" : ""
+    io = open(joinpath(DIR, "certify_feasible.$(name).$(method)$(RERUN !== nothing ? "" : tag)$(suffix).$(HOST).csv"), "w")
     println(io, "operator,n,method,N,R,ks0,reason0,ks,dimQ,gbar,gamma1,gamma2,cover_ok,reason,floor,",
         "min_sigma11,min_sigma22,nevals,count,count_ok,count_valid,dense_min_sigma,nframes,t,error")
     for r in rows
