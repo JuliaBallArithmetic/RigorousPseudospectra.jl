@@ -16,10 +16,16 @@
 # N <= 16 and m more spread geometrically up to n/2; SHARD=i/S keeps every S-th of those starting
 # at the i-th (0-based). The output file is tagged accordingly.
 #
+# The frame reported at each radius is saved with save_certificate.jl to
+# frames/effective_frame.<op>.<method>.N<N>.<host>.jld2. With REPLAY=1 the search is skipped: the
+# radii and ks are read back from this script's own earlier output (same tag) and only the frame
+# reported there is rebuilt, certified and saved, the numbers going to a file tagged .replay.
+#
 #   JULIA_NUM_THREADS=2 OPENBLAS_NUM_THREADS=8 julia --project=bench bench/effective_frame.jl names [method]
 #   NSAMPLE=48 SHARD=0/4 ... julia --project=bench bench/effective_frame.jl rdb5000
 using RigorousPseudospectra, LinearAlgebra, Printf
 include(joinpath(@__DIR__, "pseudospectra_ops.jl"))
+include(joinpath(@__DIR__, "save_certificate.jl"))
 BLAS.set_num_threads(parse(Int, get(ENV, "OPENBLAS_NUM_THREADS", "8")))
 
 const HOST = readchomp(`hostname -s`)
@@ -32,13 +38,15 @@ NSAMPLE = parse(Int, get(ENV, "NSAMPLE", "0"))
 SHARD = get(ENV, "SHARD", "")
 shard_i, shard_S = isempty(SHARD) ? (0, 1) : parse.(Int, split(SHARD, "/"))
 tag = (NSAMPLE > 0 ? ".sampled" : "") * (shard_S > 1 ? ".s$(shard_i)of$(shard_S)" : "")
+REPLAY = get(ENV, "REPLAY", "0") == "1"
+const FRAMES = joinpath(OUT, "frames")
 
 function evaluate(o, op, A, s, n, R, ks)
     tf = @elapsed ((Q, _) = two_sided_frame(o.matvec, o.adjoint, n, R; ks, Leig = 200,
         Lsv = min(n, 2max(ks, 1) + 60), T = op.T, method))
     d = size(Q, 2)
     d == 0 && return (; ks, d, gbar = Inf, gbar1 = Inf, floor = s[1], g22 = NaN, γ1 = NaN,
-        γ2 = NaN, ok = false, t = tf)
+        γ2 = NaN, ok = false, sc = nothing, t = tf)
     tc = @elapsed (sc = certify_split(op, Q; order = 8, target = R, compression = :none))
     g22 = NaN
     if n <= DENSE_MAX
@@ -48,7 +56,7 @@ function evaluate(o, op, A, s, n, R, ks)
     end
     g1 = sc.far === nothing ? NaN : sc.far.gbar_trace[1]
     return (; ks, d, gbar = sc.gbar, gbar1 = g1, floor = 2d + 1 <= n ? s[2d + 1] : 0.0, g22,
-        γ1 = sc.γ1, γ2 = sc.γ2, ok = sc.gbar < R, t = tf + tc)
+        γ1 = sc.γ1, γ2 = sc.γ2, ok = sc.gbar < R, sc, t = tf + tc)
 end
 
 for nm in names
@@ -59,7 +67,12 @@ for nm in names
     n = size(A, 1)
     lam = sort(abs.(eigvals(A)); rev = true)
     s = svdvals(A)
-    io = open(joinpath(OUT, "effective_frame.$(name).$(method)$(tag).$(HOST).csv"), "w")
+    prevrows = REPLAY ? let ls = readlines(joinpath(OUT, "effective_frame.$(name).$(method)$(tag).$(HOST).csv"))
+        h = split(ls[1], ',')
+        Dict(parse(Int, d["N"]) => d for d in (Dict(zip(h, split(x, ','))) for x in ls[2:end])
+             if d["status"] != "error")
+    end : nothing
+    io = open(joinpath(OUT, "effective_frame.$(name).$(method)$(tag)$(REPLAY ? ".replay" : "").$(HOST).csv"), "w")
     println(io, "operator,n,method,N,R,K,dmin,status,nevals,ks,dimQ,gbar,gbar1,floor,normG22,",
         "gamma1,gamma2,dimQ0,gbar0,t,error")
     gapN = [N for N in 1:(n - 1) if lam[N] > lam[N + 1] * (1 + 1e-9)]
@@ -69,7 +82,7 @@ for nm in names
             log(length(upper)); length = NSAMPLE))), 1, length(upper))])
         gapN = sort(unique(vcat([N for N in gapN if N <= 16], pick)))
     end
-    gapN = gapN[(shard_i + 1):shard_S:end]
+    gapN = REPLAY ? sort(collect(keys(prevrows))) : gapN[(shard_i + 1):shard_S:end]
     for N in gapN
         R = sqrt(lam[N] * lam[N + 1])
         K = count(>=(R), s)
@@ -83,7 +96,10 @@ for nm in names
             r0 = f(0)
             status = "found"
             best = nothing
-            if r0.ok
+            if REPLAY
+                status = prevrows[N]["status"]
+                best = f(parse(Int, prevrows[N]["ks"]))
+            elseif r0.ok
                 best = r0
             else
                 lo = 0
@@ -104,6 +120,10 @@ for nm in names
                 end
             end
             b = best
+            b.sc === nothing || save_certificate(joinpath(FRAMES,
+                    "effective_frame.$(name).$(method).N$(N).$(HOST).jld2"), b.sc, op; R,
+                script = "bench/effective_frame.jl", operator = name, N, ks = b.ks, method,
+                status, normG22_dense = b.g22)
             @sprintf("%s,%d,%s,%d,%.17g,%d,%d,%s,%d,%d,%d,%.17g,%.17g,%.17g,%.17g,%.6g,%.6g,%d,%.17g,%.2f,",
                 name, n, method, N, R, K, dmin, status, length(cache), b.ks, b.d, b.gbar, b.gbar1,
                 b.floor, b.g22, b.γ1, b.γ2, r0.d, r0.gbar, sum(v.t for v in values(cache)))

@@ -15,8 +15,12 @@
 # whose boundary passes the hypothesis of prop:count, with the same cover. When 2^KE <= DENSEMAX the
 # dense eigenvalues outside R are compared with the discs and the count.
 #
+# The frame reported at each radius is saved with ../save_certificate.jl to
+# frames/exp5_bz.k<KE>.xi<ξ>.N<N>.<host>.jld2, with the discs.
+#
 #   JULIA_NUM_THREADS=8 OPENBLAS_NUM_THREADS=4 julia --project=bench/bz bench/bz/exp5_bz.jl KE xi
 include(joinpath(@__DIR__, "bzcommon.jl"))
+include(joinpath(@__DIR__, "..", "save_certificate.jl"))
 
 const HOST = readchomp(`hostname -s`)
 const DIR = joinpath(homedir(), "ResearchData", "KrylovPseudospectra_Data", "pseudospectra", "bz_exp5")
@@ -86,7 +90,10 @@ for N in gapN
     end
     b = f(hi)
     tt = sum(v.t for v in values(cache))
+    framefile = joinpath(DIR, "frames", "exp5_bz.k$(KE).xi$(Ξ).N$(N).$(HOST).jld2")
     if !b.ok
+        save_certificate(framefile, b.sc, op; R, chk = b.e, script = "bench/bz/exp5_bz.jl",
+            operator = "bz", KE, xi = Ξ, N, ks = b.ks)
         @printf(io, "%d,%g,%d,%.17g,%d,%d,%.17g,%.6g,%.6g,false,%s,,,,,,,%d,%.1f\n", KE, Ξ, N, R, b.ks,
             b.sc.k, b.sc.gbar, b.sc.γ1, b.sc.γ2, b.e === nothing ? "gbar" : string(b.e.reason),
             length(cache), tt)
@@ -96,6 +103,8 @@ for N in gapN
     td = @elapsed (ext = RP.certify_exterior(b.sc, R; nθ = 64, nradii = NRADII, maxdepth = 64,
         method = :svd))
     good = [d for d in ext.discs if isfinite(d.radius)]
+    save_certificate(framefile, b.sc, op; R, chk = ext.exterior, discs = good,
+        script = "bench/bz/exp5_bz.jl", operator = "bz", KE, xi = Ξ, N, ks = b.ks, count = ext.count)
     out = dense ? [z for z in lam if abs(z) > R] : ComplexF64[]
     inside(d) = count(z -> abs(z - d.center) < d.radius, out)
     din = dense ? (all(z -> any(d -> abs(z - d.center) < d.radius, good), out) &&

@@ -17,9 +17,15 @@
 # every feasible radius with N <= 16 and m more spread geometrically up to the largest; SHARD=i/S
 # keeps every S-th of those starting at the i-th. The output file is tagged accordingly.
 #
+# The frame reported at each radius is saved with save_certificate.jl to
+# frames/certify_feasible.<op>.<method>.N<N>.<host>.jld2. With REPLAY=1 the search is skipped: the
+# radii and ks are read back from this script's own earlier output (same tag) and only the frame
+# reported there is rebuilt, certified and saved, the numbers going to a file tagged .replay.
+#
 #   JULIA_NUM_THREADS=2 OPENBLAS_NUM_THREADS=8 julia --project=bench bench/certify_feasible.jl names [method]
 using RigorousPseudospectra, LinearAlgebra, Printf
 include(joinpath(@__DIR__, "pseudospectra_ops.jl"))
+include(joinpath(@__DIR__, "save_certificate.jl"))
 BLAS.set_num_threads(parse(Int, get(ENV, "OPENBLAS_NUM_THREADS", "8")))
 
 const HOST = readchomp(`hostname -s`)
@@ -31,6 +37,8 @@ NSAMPLE = parse(Int, get(ENV, "NSAMPLE", "0"))
 SHARD = get(ENV, "SHARD", "")
 shard_i, shard_S = isempty(SHARD) ? (0, 1) : parse.(Int, split(SHARD, "/"))
 tag = (NSAMPLE > 0 ? ".sampled" : "") * (shard_S > 1 ? ".s$(shard_i)of$(shard_S)" : "")
+REPLAY = get(ENV, "REPLAY", "0") == "1"
+const FRAMES = joinpath(DIR, "frames")
 
 function evaluate(o, op, A, n, R, ks, method)
     tf = @elapsed ((Q, _) = two_sided_frame(o.matvec, o.adjoint, n, R; ks, Leig = 200,
@@ -38,7 +46,7 @@ function evaluate(o, op, A, n, R, ks, method)
     tc = @elapsed (sc = certify_split(op, Q; order = 8, target = R, compression = :full))
     tv = @elapsed ((cnt, cok, e) = count_exterior(sc, R; nθ = 64, maxdepth = 64, method = :svd))
     return (; ks, d = sc.k, gbar = sc.gbar, γ1 = sc.γ1, γ2 = sc.γ2, ok = e.ok && e.region_ok,
-        e, cnt, cok, t = tf + tc + tv)
+        e, cnt, cok, sc, t = tf + tc + tv)
 end
 
 function readrows(path)
@@ -53,32 +61,37 @@ for nm in names
                          endswith(f, ".$(HOST).csv"), readdir(DIR))
     rows = [r for f in files for r in readrows(joinpath(DIR, f)) if r["status"] == "found"]
     sort!(unique!(r -> r["N"], rows); by = r -> parse(Int, r["N"]))
-    if NSAMPLE > 0
+    if REPLAY
+        prev = joinpath(DIR, "certify_feasible.$(name).$(method)$(tag).$(HOST).csv")
+        rows = [r for r in readrows(prev) if !isempty(r["ks"])]
+    elseif NSAMPLE > 0
         low = [r for r in rows if parse(Int, r["N"]) <= 16]
         high = [r for r in rows if parse(Int, r["N"]) > 16]
         pick = isempty(high) ? eltype(rows)[] : unique(high[clamp.(round.(Int, exp.(range(0,
             log(length(high)); length = NSAMPLE))), 1, length(high))])
         rows = vcat(low, pick)
     end
-    rows = rows[(shard_i + 1):shard_S:end]
+    REPLAY || (rows = rows[(shard_i + 1):shard_S:end])
     o = ps_operator(name)
     op = LinOp(o.A)
     A = Matrix(o.A)
     n = size(A, 1)
-    io = open(joinpath(DIR, "certify_feasible.$(name).$(method)$(tag).$(HOST).csv"), "w")
+    io = open(joinpath(DIR, "certify_feasible.$(name).$(method)$(tag)$(REPLAY ? ".replay" : "").$(HOST).csv"), "w")
     println(io, "operator,n,method,N,R,ks0,reason0,ks,dimQ,gbar,gamma1,gamma2,cover_ok,reason,floor,",
         "min_sigma11,min_sigma22,nevals,count,count_ok,count_valid,dense_min_sigma,nframes,t,error")
     for r in rows
         N = parse(Int, r["N"])
         R = parse(Float64, r["R"])
-        ks0 = parse(Int, r["ks"])
+        ks0 = parse(Int, REPLAY ? r["ks0"] : r["ks"])
         ksmax = (n ÷ 2 - N) ÷ 2
         line = try
             cache = Dict{Int, Any}()
             f(ks) = get!(() -> evaluate(o, op, A, n, R, ks, method), cache, ks)
-            r0 = f(ks0)
+            r0 = REPLAY ? (; e = (; reason = Symbol(r["reason0"]))) : f(ks0)
             best = nothing
-            if r0.ok
+            if REPLAY
+                best = f(parse(Int, r["ks"]))
+            elseif r0.ok
                 best = r0
             else
                 lo, hi = ks0, ks0
@@ -97,6 +110,9 @@ for nm in names
                 end
             end
             b = best
+            save_certificate(joinpath(FRAMES, "certify_feasible.$(name).$(method).N$(N).$(HOST).jld2"),
+                b.sc, op; R, chk = b.e, script = "bench/certify_feasible.jl", operator = name, N,
+                ks = b.ks, method, count = b.cnt, count_valid = b.cok)
             dmin = NaN
             if n <= DENSE_MAX
                 dmin = minimum(minimum(svdvals(A - R * cis(2π * t / 64) * I)) for t in 0:63)
