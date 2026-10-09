@@ -307,21 +307,33 @@ function draw(r)
     cr = isempty(fin) ? (0.0, 1.0) : (minimum(fin), maximum(fin))
     levs = sort(r.levels .* r.abar)
     haszoom = r.z !== nothing
-    fig = Figure(size = haszoom ? (1060, 470) : (620, 540), fontsize = 13,
+    fig = Figure(size = haszoom ? (1180, 470) : (620, 540), fontsize = 13,
         backgroundcolor = :white)
     ax = newaxis(fig, (1, 1))
     hm = panel!(ax, r.xs, r.ys, r.F, r.D, r, cr, levs)
     xlims!(ax, -r.half, r.half)
     ylims!(ax, -r.half, r.half)
     if haszoom
+        # each panel has its own colour scale and its own contour levels: the zoom's floor lives on a
+        # scale the whole plane drowns, and its levels are the decades of its own dense σ_min
         Label(fig[1, 1, TopLeft()], "a", font = :bold, color = INK, padding = (0, 6, 4, 0))
-        ax2 = newaxis(fig, (1, 2))
-        panel!(ax2, r.z.xs, r.z.ys, r.z.F, r.z.D, r, cr, levs; discs = r.discs)
+        Colorbar(fig[1, 2], hm; label = "log₁₀ of the certified lower bound on σ_min(A − zI)",
+            labelcolor = INK, ticklabelcolor = MUTED, labelsize = 12, ticklabelsize = 11)
+        fin2 = filter(isfinite, [f > 0 ? log10(f) : NaN for f in r.z.F])
+        cr2 = isempty(fin2) ? (0.0, 1.0) : (minimum(fin2), maximum(fin2))
+        dpos = filter(>(0), vec(r.z.D))
+        dlo, dhi = log10(max(minimum(dpos), maximum(dpos) * 1e-12)), log10(maximum(dpos))
+        dec = collect(ceil(Int, dlo):floor(Int, dhi))
+        length(dec) > 4 && (dec = dec[round.(Int, range(1, length(dec); length = 4))])
+        levs2 = 10.0 .^ dec
+        ax2 = newaxis(fig, (1, 3))
+        hm2 = panel!(ax2, r.z.xs, r.z.ys, r.z.F, r.z.D, r, cr2, levs2; discs = r.discs)
         xlims!(ax2, r.z.xs[1], r.z.xs[end])
         ylims!(ax2, r.z.ys[1], r.z.ys[end])
-        Label(fig[1, 2, TopLeft()], "b", font = :bold, color = INK, padding = (0, 6, 4, 0))
-        Colorbar(fig[1, 3], hm; label = "log₁₀ of the certified lower bound on σ_min(A − zI)",
+        Label(fig[1, 3, TopLeft()], "b", font = :bold, color = INK, padding = (0, 6, 4, 0))
+        Colorbar(fig[1, 4], hm2; label = "log₁₀ of the certified lower bound on σ_min(A − zI)",
             labelcolor = INK, ticklabelcolor = MUTED, labelsize = 12, ticklabelsize = 11)
+        println("   zoom contour levels ", join((@sprintf("%.4g", l) for l in levs2), ", "))
     else
         Colorbar(fig[1, 2], hm; label = "log₁₀ of the certified lower bound on σ_min(A − zI)",
             labelcolor = INK, ticklabelcolor = MUTED, labelsize = 12, ticklabelsize = 11)
