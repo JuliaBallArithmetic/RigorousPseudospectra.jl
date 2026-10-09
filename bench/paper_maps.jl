@@ -86,6 +86,19 @@ const CONFIGS = Dict(
 function build(name)
     o = ps_operator(name)
     op = LinOp(o.A)
+    # R=<radius> KS=<ks> in the environment fix the radius and the frame (a row certified by
+    # certify_feasible.jl) and bypass the planner; the far-block sweep is then of order 8 as there
+    if haskey(ENV, "R")
+        R = parse(Float64, ENV["R"])
+        ks = parse(Int, ENV["KS"])
+        t_frame = @elapsed ((Q, _) = two_sided_frame(o.matvec, o.adjoint, o.n, R; ks, Leig = 200,
+            Lsv = min(o.n, 2ks + 60), T = op.T))
+        t_split = @elapsed (sc = certify_split(op, Q; order = 8, target = R, compression = :none))
+        @printf("%s: R = %.6g, ks = %d (given), dim Q = %d, gbar = %.6g\n", name, R, ks, sc.k, sc.gbar)
+        floor_given(z) = resolvent_floor(sc, z; method = :svd).floor
+        return (; o, op, sc, floor_at = floor_given, R, t_frame, t_split, plan = nothing,
+            absl1 = maximum(abs, eigvals(Matrix(o.A))))
+    end
     # the radius and the frame are the planner's, not a radius read off a dense eigendecomposition
     t_plan = @elapsed (pl = plan_split(op, o.matvec, o.adjoint; mmax = 12, nR = 6,
         amargin = 1.5, Leig = 200))
@@ -200,7 +213,7 @@ function run_one(name)
 
     discs = NamedTuple[]
     cnt = -1
-    if cfg.discs
+    if cfg.discs && !haskey(ENV, "R")
         t = @elapsed (ext = certify_exterior(sc, b.R; nθ = 256, maxdepth = 8, nradii = 10,
             method = :svd))
         cnt = ext.count
