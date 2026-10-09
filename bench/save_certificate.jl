@@ -2,7 +2,9 @@
 # certificate without rebuilding the frame. Written as JLD2, which is HDF5, and only as plain arrays,
 # numbers and strings, so that the file reads from h5py or MATLAB without Julia types:
 #
-#   meta/          script, host, commit, date, and the caller's configuration (operator, N, R, ...)
+#   meta/          script, host, the commits of RigorousPseudospectra and BallArithmetic (with
+#                  "+dirty" when their trees carry uncommitted changes), date, and the caller's
+#                  configuration (operator, N, R, ...)
 #   operator/      n, epsA, etaA (the rounding constants of eq:roundA, or the absolute η)
 #   frame/         Q (n × k), alpha (certified ‖I − QᵀQ‖)
 #   G11/           mid and rad of the ball compression Qᵀ A Q, and of the ball Gram QᵀQ
@@ -14,20 +16,30 @@
 #   include("save_certificate.jl"); save_certificate(path, sc, op; R, chk, discs, config...)
 using JLD2, BallArithmetic
 
+# the short commit of the repository holding `dir`, with "+dirty" when its tree has uncommitted
+# changes; empty when it is not a git checkout
+function _git_state(dir)
+    try
+        c = readchomp(`git -C $dir rev-parse --short HEAD`)
+        dirty = !isempty(readchomp(`git -C $dir status --porcelain --untracked-files=no`))
+        return dirty ? c * "+dirty" : c
+    catch
+        return ""
+    end
+end
+
 function save_certificate(path::AbstractString, sc, op; R = NaN, chk = nothing, discs = nothing,
         script = "", config...)
     mkpath(dirname(path))
-    commit = try
-        readchomp(`git -C $(@__DIR__) rev-parse --short HEAD`)
-    catch
-        ""
-    end
+    commit = _git_state(@__DIR__)
+    ba_commit = _git_state(pkgdir(BallArithmetic))
     comps = RigorousPseudospectra._has_counts(sc) ? RigorousPseudospectra._comps(sc) : []
     far = sc.far
     jldopen(path, "w") do f
         f["meta/script"] = String(script)
         f["meta/host"] = readchomp(`hostname -s`)
         f["meta/commit"] = commit
+        f["meta/ballarithmetic_commit"] = ba_commit
         f["meta/date"] = string(Libc.strftime("%Y-%m-%dT%H:%M:%S", time()))
         for (key, v) in pairs(config)
             f["meta/config/$(key)"] = v isa Symbol ? String(v) : v
