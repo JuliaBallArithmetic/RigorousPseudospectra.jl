@@ -187,6 +187,11 @@ end
 
 function run_one(name)
     cfg = CONFIGS[name]
+    # ZOOM=xlo,xhi,ylo,yhi (and NGZ) in the environment add or replace the second panel
+    if haskey(ENV, "ZOOM")
+        zb = Tuple(parse.(Float64, split(ENV["ZOOM"], ",")))
+        cfg = merge(cfg, (; zoom = zb, ngz = parse(Int, get(ENV, "NGZ", "300"))))
+    end
     b = build(name)
     b === nothing && return nothing
     g = gridmap(b; cfg.ng)
