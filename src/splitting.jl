@@ -460,7 +460,14 @@ function eig_intervals(sc::SplitCertificate)
     return out
 end
 
-"`γ̄ ≥ ‖P⊥AZ‖` for Hermitian A: both couplings bound the same number, so the smaller is kept."
+"""
+    coupling_hermitian(sc::SplitCertificate) -> γ̄
+
+For a certificate made with `hermitian = true`, `γ̄ = min(γ1, γ2) ≥ ‖P⊥AZ‖₂`, `Z` the isometry of
+the frame: for a Hermitian `A`, `G21 = G12*`, so the two couplings have the same norm and each of
+the two certified bounds bounds it (proof of cor:selfadj). Throws for a certificate that is not
+Hermitian.
+"""
 coupling_hermitian(sc::SplitCertificate) = (sc.hermitian || error("not a Hermitian certificate");
     min(sc.γ1, sc.γ2))
 

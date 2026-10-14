@@ -57,7 +57,15 @@ function _tall_norm_up(C::BallMatrix, coupling::Symbol)
     return min(sqrt_up(upper_bound_L2_opnorm(Gm; svd = true)), upper_bound_frobenius(C))
 end
 
-"α ≥ ‖I − Q*Q‖ and the ball Q*Q."
+"""
+    frame_alpha(Q) -> (α, Mq)
+
+`α ≥ ‖I_k − Q*Q‖₂`, the quantity of eq:alpha, and the ball matrix `Mq ∋ Q*Q`: `Q*Q` is formed by
+a ball product of the exact `Q*` and `Q`, and `α` is the upper bound of the spectral norm of
+`Mq − I` by `upper_bound_L2_opnorm(…; svd = true)`, which holds for every matrix of the ball.
+`α = 0` for an empty frame. Whether `α < 1`, which prop:almostortho needs, is the caller's check
+([`frame_data`](@ref) makes it).
+"""
 function frame_alpha(Q::AbstractMatrix)
     k = size(Q, 2)
     Mq = BallMatrix(Matrix(Q')) * BallMatrix(Matrix(Q))
