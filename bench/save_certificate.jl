@@ -8,7 +8,9 @@
 #   operator/      n, epsA, etaA (the rounding constants of eq:roundA, or the absolute η)
 #   frame/         Q (n × k), alpha (certified ‖I − QᵀQ‖)
 #   G11/           mid and rad of the ball compression Qᵀ A Q, and of the ball Gram QᵀQ
-#   far/           gbar, abar, gamma1, gamma2, the bound at every order of the sweep (gbar_trace)
+#   far/           gbar, abar, gamma1, gamma2, the bound at every order of the sweep from the
+#                  trace (gbar_trace) and from interpolation (gbar_interp_order), gbar_interp at
+#                  the first order, and the check that gave gbar (passed, tpass)
 #   enclosure/     the verified eigenvalue enclosure of G11: component centres, radii, counts
 #   cover/         the circle check: ok, region_ok, reason, floor, nevals, min σ11, min σ22
 #   discs/         isolation discs, when given: centres, radii, counts
@@ -60,6 +62,9 @@ function save_certificate(path::AbstractString, sc, op; R = NaN, chk = nothing, 
         f["far/gamma2"] = sc.γ2
         f["far/gbar_trace"] = far === nothing ? Float64[] : far.gbar_trace
         f["far/gbar_interp"] = far === nothing ? NaN : far.gbar_interp
+        f["far/gbar_interp_order"] = far === nothing ? Float64[] : far.gbar_interp_order
+        f["far/passed"] = far === nothing ? "" : String(far.passed)
+        f["far/tpass"] = far === nothing ? 0 : far.tpass
         f["enclosure/ok"] = RigorousPseudospectra._has_counts(sc)
         f["enclosure/centres"] = ComplexF64[C.center for C in comps]
         f["enclosure/radii"] = Float64[C.radius for C in comps]

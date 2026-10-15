@@ -94,7 +94,9 @@ end
     SweepSums
 
 The running sums of one sweep of order `m` (upper bounds, rounded upward): `Γ[s+1, s'+1] ≥
-Σ_j ν_{j,s}ν_{j,s'}`, `Σν[s+1] ≥ Σ_j ν_{j,s}` for `s, s' = 0:m`, `N1`, `Ninf`; and the plain
+Σ_j ν_{j,s}ν_{j,s'}`, `Σν[s+1] ≥ Σ_j ν_{j,s}` and `νmax[s+1] ≥ max_j ν_{j,s}` for `s, s' = 0:m`;
+`N1s[t] ≥ max_j ‖x_{j,t}‖₁` and `Ninfs[t] ≥ ‖Σ_j |x_{j,t}|‖_∞` for `t = 1:m`, `N1`, `Ninf` their
+values at `t = 1`; and the plain
 floating-point values `fp[t] = Σ_j ‖x_{j,t}‖²` (t = 1:m), `N1fp`, `Ninffp`, used only to choose
 where to start the checks.
 """
@@ -103,6 +105,7 @@ struct SweepSums
     n::Int
     Γ::Matrix{Float64}
     Σν::Vector{Float64}
+    νmax::Vector{Float64}
     fp::Vector{Float64}
     N1::Float64
     Ninf::Float64
@@ -182,7 +185,7 @@ function trace_sweep(op::LinOp, Q::AbstractMatrix, m::Integer; scale::Real = 1.0
         Threads.@threads :static for tid in 1:nt
             # `local`: these names are assigned again after the loop, and the loop body is a
             # closure; without it every task would share (and race on) the same accumulators
-            local X, Yv, T1, T2, S, Tk, Γ, Σν, fp, acc, N1, N1fp, fin, ν, nmv
+            local X, Yv, T1, T2, S, Tk, Γ, Σν, νmax, fp, acc, N1, N1fp, fin, ν, nmv
             X = zeros(T, n, b)
             Yv = zeros(T, n, b)
             T1 = zeros(T, n, b)
@@ -191,6 +194,7 @@ function trace_sweep(op::LinOp, Q::AbstractMatrix, m::Integer; scale::Real = 1.0
             Tk = zeros(T, k, b)
             Γ = zeros(m + 1, m + 1)
             Σν = zeros(m + 1)
+            νmax = zeros(m + 1)
             fp = zeros(m)
             acc = zeros(n, m)
             N1 = zeros(m)
@@ -229,10 +233,10 @@ function trace_sweep(op::LinOp, Q::AbstractMatrix, m::Integer; scale::Real = 1.0
                         fin &= isfinite(ss)
                         ν[c, s + 1] = sqrt_up(add_up(div_up(ss, onemsq), ηsq))
                         fp[s] += ss
-                        # the ℓ¹ and ℓ∞ sums at every order, not only the first: the column sums
-                        # give ‖B^s‖₁ and the accumulated row sums give ‖B^s‖_∞, whose geometric
-                        # mean bounds ‖B^s‖₂ and is far below the Frobenius norm for a sparse or
-                        # banded block
+                        # the ℓ¹ and ℓ∞ sums at every order, not only the first: with M_s the
+                        # matrix of the s-th vectors of the chains (B, B*B, BB*B, ...), the column
+                        # sums give ‖M_s‖₁ and the accumulated row sums ‖M_s‖_∞, whose geometric
+                        # mean bounds ‖M_s‖₂ = ‖B‖^s (eq:interpt)
                         N1[s] = max(N1[s], add_up(div_up(s1, oneml1), ηl1))
                         N1fp[s] = max(N1fp[s], s1)
                         @inbounds for r in 1:n
@@ -244,19 +248,21 @@ function trace_sweep(op::LinOp, Q::AbstractMatrix, m::Integer; scale::Real = 1.0
                 for c in 1:bJ
                     for s in 1:(m + 1)
                         Σν[s] = add_up(Σν[s], ν[c, s])
+                        νmax[s] = max(νmax[s], ν[c, s])
                         for s2 in 1:(m + 1)
                             Γ[s, s2] = add_up(Γ[s, s2], mul_up(ν[c, s], ν[c, s2]))
                         end
                     end
                 end
             end
-            results[tid] = (; Γ, Σν, fp, acc, N1, N1fp, fin, nmv)
+            results[tid] = (; Γ, Σν, νmax, fp, acc, N1, N1fp, fin, nmv)
         end
     finally
         nt > 1 && BLAS.set_num_threads(oldblas)
     end
     Γ = zeros(m + 1, m + 1)
     Σν = zeros(m + 1)
+    νmax = zeros(m + 1)
     fp = zeros(m)
     acc = zeros(n, m)
     N1s = zeros(m)
@@ -266,6 +272,7 @@ function trace_sweep(op::LinOp, Q::AbstractMatrix, m::Integer; scale::Real = 1.0
     for r in results
         Γ .= add_up.(Γ, r.Γ)
         Σν .= add_up.(Σν, r.Σν)
+        νmax .= max.(νmax, r.νmax)
         fp .+= r.fp
         acc .+= r.acc
         N1s .= max.(N1s, r.N1)
@@ -280,7 +287,7 @@ function trace_sweep(op::LinOp, Q::AbstractMatrix, m::Integer; scale::Real = 1.0
     N1fp = m == 0 ? 0.0 : N1fps[1]
     Ninffp = m == 0 ? 0.0 : Ninffps[1]
     fin &= all(isfinite, Γ) && all(isfinite, N1s) && all(isfinite, Ninfs)
-    return SweepSums(m, n, Γ, Σν, fp, N1, Ninf, N1fp, Ninffp, N1s, Ninfs, N1fps, Ninffps,
+    return SweepSums(m, n, Γ, Σν, νmax, fp, N1, Ninf, N1fp, Ninffp, N1s, Ninfs, N1fps, Ninffps,
         fin, scale, nmv, nt, b, time() - t0)
 end
 
@@ -316,15 +323,30 @@ function F_up(S::SweepSums, t::Int, εB, ηB, g)
 end
 
 """
-Upper bound on `‖B^t‖₂²` from the ℓ¹ and ℓ∞ sums at order `t`, by interpolation:
-`‖M‖₂ ≤ sqrt(‖M‖₁‖M‖_∞)`. The rounding allowance is the one `I_up` uses, applied at the order in
-question. Returns `Inf` when the order was not accumulated.
+    I_up(S, t, εB, ηB, g)
+
+Upper bound of `I_{a,t}(g)` of eq:FI, which bounds `‖B‖^{2t} = ‖M_t‖₂²` for `g ≥ ‖B‖`, `M_t` the
+matrix of the `t`-th vectors of the chains, by interpolation, `‖M_t‖₂² ≤ ‖M_t‖₁‖M_t‖_∞`
+(eq:interpt). The computed vector `x_{j,t}` is within
+`δ_{j,t} = Σ_{s<t} g^{t−1−s}(εB ν_{j,s} + ηB)` of `M_t e_j` (lem:onestep at each application and
+`‖B‖ ≤ g`), so `‖M_t‖₁ ≤ N1s[t] + √n max_j δ_{j,t}` and `‖M_t‖_∞ ≤ Ninfs[t] + Σ_j δ_{j,t}`. At
+`t = 1` this is `I_up(S, εB, ηB)`. Returns `Inf` when the order was not accumulated.
 """
-function I_up(S::SweepSums, t::Int, εB, ηB)
+function I_up(S::SweepSums, t::Int, εB, ηB, g)
     (1 <= t <= length(S.N1s)) || return Inf
-    e = add_up(εB, ηB)
-    return mul_up(add_up(S.N1s[t], mul_up(sqrt_up(Float64(S.n)), e)),
-        add_up(S.Ninfs[t], mul_up(Float64(S.n), e)))
+    dmax = 0.0      # ≥ max_j δ_{j,t}
+    dsum = 0.0      # ≥ Σ_j δ_{j,t}
+    St = 0.0        # ≥ Σ_{d<t} g^d
+    for s in 0:(t - 1)
+        gp = pow_up(g, t - 1 - s)
+        dmax = add_up(dmax, mul_up(mul_up(εB, gp), S.νmax[s + 1]))
+        dsum = add_up(dsum, mul_up(mul_up(εB, gp), S.Σν[s + 1]))
+        St = add_up(St, gp)
+    end
+    h = mul_up(ηB, St)
+    dmax = add_up(dmax, h)
+    dsum = add_up(dsum, mul_up(Float64(S.n), h))
+    return mul_up(add_up(S.N1s[t], mul_up(sqrt_up(Float64(S.n)), dmax)), add_up(S.Ninfs[t], dsum))
 end
 
 "Upper bound of I(g) of eq:FI."
@@ -518,7 +540,9 @@ end
 
 `ok` means that `‖G22‖ < gbar` and `‖A‖ < abar` are certified (prop:fpchecks), `gbar` the least
 of the certified bounds over the orders `t = 1:m` of the trace half and the interpolation half
-(eq:mincert). Also: `gbar_trace[t]` and `gbar_interp` (NaN when a check did not pass), the
+(eq:mincert); `passed` (`:trace` or `:interp`) and `tpass` say which check gave it, `tpass = 0` for
+the interpolation half of eq:FI at the first order. Also: `gbar_trace[t]`, `gbar_interp_order[t]`
+and `gbar_interp` (NaN when a check did not pass), the
 floating-point values `trace_fp[t] = (Σ_j‖x_t‖²)^{1/2t}` and `interp_fp`, the estimates used to
 choose the order, the scale, the one-step constants at the returned pair, and timings.
 """
@@ -531,6 +555,7 @@ struct FarBlockCertificate
     tpass::Int
     gbar_trace::Vector{Float64}
     abar_trace::Vector{Float64}
+    gbar_interp_order::Vector{Float64}
     gbar_interp::Float64
     abar_interp::Float64
     trace_fp::Vector{Float64}
@@ -612,9 +637,10 @@ function certify_far_block(op::LinOp, Q::AbstractMatrix, fd::FrameData;
     if S.finite
         for t in 1:m
             gt[t], at[t] = least_g(D, (a, g) -> check_iF(D, t, a, g), trfp[t])
-            # the interpolation half at the same order: ‖B^t‖₂ ≤ sqrt(‖B^t‖₁‖B^t‖_∞) < g^t
-            git[t], ait[t] = least_g(D, (a, g) -> I_up(D.S, t, _consts(D, a, g)...) <
-                                                  pow_down(g, 2t), sqrt(S.N1fps[t] * S.Ninffps[t]))
+            # the interpolation half at the same order: ‖B‖^t = ‖M_t‖₂ ≤ sqrt(‖M_t‖₁‖M_t‖_∞) < g^t
+            git[t], ait[t] = least_g(D, (a, g) -> I_up(D.S, t, _consts(D, a, g)..., g) <
+                                                  pow_down(g, 2t),
+                                     sqrt(S.N1fps[t] * S.Ninffps[t])^(1 / t))
         end
         gi, ai = least_g(D, (a, g) -> check_iI(D, a, g), ipfp)
     else
@@ -625,7 +651,7 @@ function certify_far_block(op::LinOp, Q::AbstractMatrix, fd::FrameData;
     isfinite(gi) && push!(cands, (gi, ai, :interp, 0))
     tc = time() - tc
     if isempty(cands)
-        return FarBlockCertificate(false, Inf, Inf, m, :none, 0, gt ./ c, at ./ c, NaN, NaN,
+        return FarBlockCertificate(false, Inf, Inf, m, :none, 0, gt ./ c, at ./ c, git ./ c, NaN, NaN,
             trfp ./ c, ipfp / c, est, c, NaN, NaN, εP, S,
             S.nmatvec + m * nsamples, te, S.time, tc)
     end
@@ -633,6 +659,6 @@ function certify_far_block(op::LinOp, Q::AbstractMatrix, fd::FrameData;
     εB, ηB = _consts(D, a, g)
     unscale(x) = isfinite(x) ? div_up(x, c) : x
     return FarBlockCertificate(true, unscale(g), unscale(a), m, which, t, unscale.(gt),
-        unscale.(at), unscale(gi), unscale(ai), trfp ./ c, ipfp / c, est, c, εB, div_up(ηB, c),
+        unscale.(at), unscale.(git), unscale(gi), unscale(ai), trfp ./ c, ipfp / c, est, c, εB, div_up(ηB, c),
         εP, S, S.nmatvec + m * nsamples, te, S.time, tc)
 end

@@ -260,6 +260,15 @@ end
         push!(rows, ("dense complex", 300, size(Qd, 2), scd.far.m, trud, scd.gbar,
             scd.abar / opnorm(A), scd.far.passed))
         @test le(trud, scd.gbar) && le(opnorm(A), scd.abar)
+        # every order of both halves is a certificate on its own (eq:FI)
+        for (s_, tru_) in ((sc, tru), (scd, trud)), x in (s_.far.gbar_trace, s_.far.gbar_interp_order)
+            @test all(g -> isnan(g) || le(tru_, g), x)
+        end
+        # the per-order interpolation bound at t = 1 is the one of eq:FI, up to the order of the
+        # upward-rounded operations
+        Sw = sc.far.sums
+        @test isapprox(RigorousPseudospectra.I_up(Sw, 1, 1e-14, 1e-300, 1.5),
+            RigorousPseudospectra.I_up(Sw, 1e-14, 1e-300); rtol = 1e-14)
         # (d) no frame: the certificate bounds ‖A‖ itself
         A0 = randn(MersenneTwister(2), 200, 200) / 20
         sc0 = certify_split(A0, zeros(200, 0); compression = false)
