@@ -449,10 +449,11 @@ For a certificate made with `hermitian = true` (A = A*): disjoint real intervals
 `count` eigenvalues of G11 = Z*AZ with multiplicity. The eigenvalues are enclosed for the midpoint
 Ĝ of G by `verifyeigall`, which does not assume Ĝ Hermitian (it is not: it is a floating-point
 compression). Each component of the inclusions, of centre `c` and radius `r`, is surrounded by the
-circle of radius `r + μ`, `μ` half the distance to the nearest other component (`‖G11‖` bound
-`snorm` if there is none), on which `σ_min(G11 − zI) > etaG ≥ ‖Ĝ − G11‖` is certified
-([`check_circle`](@ref)'s cover); by the homotopy of the header the disc holds as many eigenvalues
-of G11 as the component holds of Ĝ. G11 is Hermitian, so they are real and lie in
+circle of radius `r + μ` on which `σ_min(G11 − zI) > etaG ≥ ‖Ĝ − G11‖` is certified
+([`check_circle`](@ref)'s cover); `μ` is tried at `4·etaG` (at least `16u(|c| + r)`) and
+multiplied by 4 until the cover passes, never beyond half the distance to the nearest other
+component, so the discs are disjoint. By the homotopy of the header the disc holds as many
+eigenvalues of G11 as the component holds of Ĝ. G11 is Hermitian, so they are real and lie in
 `[Re c − r − μ, Re c + r + μ]`; overlapping intervals are merged with their counts added. Empty
 when the inclusions carry no counts or a circle fails. Throws for a certificate that is not
 Hermitian.
@@ -468,10 +469,20 @@ function eig_intervals(sc::SplitCertificate; nθ::Int = 64, maxdepth::Int = 6)
             j == i && continue
             gap = min(gap, sub_down(sub_down(dist_down(C.center, D.center), C.radius), D.radius))
         end
-        μ = isfinite(gap) ? div_down(gap, 2.0) : max(sc.snorm, C.radius)
-        R = add_down(C.radius, μ)
-        (μ > 0 && R > C.radius && _transfer_circle(sc, C.center, R; nθ, maxdepth)) ||
-            return EigInterval[]
+        μmax = isfinite(gap) ? div_down(gap, 2.0) : max(sc.snorm, C.radius)
+        μ = min(μmax, max(mul_up(4.0, sc.etaG),
+            mul_up(16unit_roundoff(Float64), add_up(abs_up(C.center), C.radius))))
+        passed = false
+        while μ > 0
+            R = add_down(C.radius, μ)
+            if R > C.radius && _transfer_circle(sc, C.center, R; nθ, maxdepth)
+                passed = true
+                break
+            end
+            μ >= μmax && break
+            μ = min(μmax, 4μ)
+        end
+        passed || return EigInterval[]
         push!(J, EigInterval(sub_down(real(C.center), add_up(C.radius, μ)),
             add_up(real(C.center), add_up(C.radius, μ)), C.count))
     end
