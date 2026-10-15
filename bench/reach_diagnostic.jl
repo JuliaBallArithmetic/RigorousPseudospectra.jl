@@ -8,10 +8,11 @@
 #   JULIA_NUM_THREADS=16 OPENBLAS_NUM_THREADS=16 julia --project=bench bench/reach_diagnostic.jl
 using LinearAlgebra, Printf
 include(joinpath(@__DIR__, "pseudospectra_ops.jl"))
+include(joinpath(@__DIR__, "datadir.jl"))
 BLAS.set_num_threads(parse(Int, get(ENV, "OPENBLAS_NUM_THREADS", "16")))
 
 const HOST = readchomp(`hostname -s`)
-const OUT = joinpath(homedir(), "ResearchData", "KrylovPseudospectra_Data", "pseudospectra", "reach")
+const OUT = joinpath(PSOUT, "reach")
 mkpath(OUT)
 names = isempty(ARGS) ? ["rdb200", "rdb800l", "rdb2048", "rdb5000", "nos3", "olm1000", "qh1484",
     "grcar500", "kahan500", "davies200", "airy200", "orrsom200", "landau400", "hatano2000",

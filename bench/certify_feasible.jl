@@ -28,11 +28,12 @@
 #   JULIA_NUM_THREADS=2 OPENBLAS_NUM_THREADS=8 julia --project=bench bench/certify_feasible.jl names [method]
 using RigorousPseudospectra, LinearAlgebra, Printf
 include(joinpath(@__DIR__, "pseudospectra_ops.jl"))
+include(joinpath(@__DIR__, "datadir.jl"))
 include(joinpath(@__DIR__, "save_certificate.jl"))
 BLAS.set_num_threads(parse(Int, get(ENV, "OPENBLAS_NUM_THREADS", "8")))
 
 const HOST = readchomp(`hostname -s`)
-const DIR = joinpath(homedir(), "ResearchData", "KrylovPseudospectra_Data", "pseudospectra", "reach")
+const DIR = joinpath(PSOUT, "reach")
 names = split(ARGS[1], ",")
 method = length(ARGS) >= 2 ? Symbol(ARGS[2]) : :qr
 DENSE_MAX = 2048

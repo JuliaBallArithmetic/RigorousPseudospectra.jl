@@ -7,10 +7,11 @@
 # ‖G22‖ formed densely, against the floor σ_{2d+1}(A) and the bound σ_{ks+1}(A) of prop:frame.
 using RigorousPseudospectra, LinearAlgebra, Printf
 include(joinpath(@__DIR__, "pseudospectra_ops.jl"))
+include(joinpath(@__DIR__, "datadir.jl"))
 BLAS.set_num_threads(16)
 const HOST = readchomp(`hostname -s`)
-out = joinpath(homedir(), "ResearchData", "KrylovPseudospectra_Data", "pseudospectra", "reach",
-    "frame_exact_sv.$(HOST).csv")
+out = joinpath(PSOUT, "reach", "frame_exact_sv.$(HOST).csv")
+mkpath(dirname(out))
 io = open(out, "w")
 println(io, "operator,n,N,R,K,ks,frame,dimQ,normG22,floor,sigma_ks1")
 g22(A, Q) = (Qo = Matrix(qr(Q).Q)[:, 1:size(Q, 2)]; P = I - Qo * Qo'; opnorm(P * A * P))

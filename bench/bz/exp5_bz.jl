@@ -21,9 +21,10 @@
 #   JULIA_NUM_THREADS=8 OPENBLAS_NUM_THREADS=4 julia --project=bench/bz bench/bz/exp5_bz.jl KE xi
 include(joinpath(@__DIR__, "bzcommon.jl"))
 include(joinpath(@__DIR__, "..", "save_certificate.jl"))
+include(joinpath(@__DIR__, "..", "datadir.jl"))
 
 const HOST = readchomp(`hostname -s`)
-const DIR = joinpath(homedir(), "ResearchData", "KrylovPseudospectra_Data", "pseudospectra", "bz_exp5")
+const DIR = joinpath(PSOUT, "bz_exp5")
 mkpath(DIR)
 const KE = parse(Int, ARGS[1])
 const Ξ = parse(Float64, ARGS[2])

@@ -25,11 +25,12 @@
 #   NSAMPLE=48 SHARD=0/4 ... julia --project=bench bench/effective_frame.jl rdb5000
 using RigorousPseudospectra, LinearAlgebra, Printf
 include(joinpath(@__DIR__, "pseudospectra_ops.jl"))
+include(joinpath(@__DIR__, "datadir.jl"))
 include(joinpath(@__DIR__, "save_certificate.jl"))
 BLAS.set_num_threads(parse(Int, get(ENV, "OPENBLAS_NUM_THREADS", "8")))
 
 const HOST = readchomp(`hostname -s`)
-const OUT = joinpath(homedir(), "ResearchData", "KrylovPseudospectra_Data", "pseudospectra", "reach")
+const OUT = joinpath(PSOUT, "reach")
 mkpath(OUT)
 names = split(ARGS[1], ",")
 method = length(ARGS) >= 2 ? Symbol(ARGS[2]) : :qr

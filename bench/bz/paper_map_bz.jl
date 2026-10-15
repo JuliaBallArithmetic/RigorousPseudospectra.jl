@@ -20,6 +20,7 @@
 #   OPENBLAS_NUM_THREADS=4 julia -t 16 --project=bench/bz bench/bz/paper_map_bz.jl xi KE N [budget_s] [ncheck]
 
 include(joinpath(@__DIR__, "bzcommon.jl"))
+include(joinpath(@__DIR__, "..", "datadir.jl"))
 using Serialization
 
 const Ξ = length(ARGS) >= 1 ? parse(Float64, ARGS[1]) : 1e-1
@@ -35,8 +36,7 @@ const NGMIN, NGMAX = 120, 400
 # are the leading Ritz values instead.
 const DENSEMAX = 4096
 
-const MAPDIR = joinpath(homedir(), "ResearchData", "KrylovPseudospectra_Data", "pseudospectra",
-    "maps")
+const MAPDIR = joinpath(PSOUT, "maps")
 mkpath(MAPDIR)
 
 k = 2^KE
@@ -53,7 +53,7 @@ Amul, Aadj, η, oi = make_operator(L, l)
 op = RP.LinOp(Amul, Aadj, k; epsA = 0.0, etaA = η)
 
 # --- the radius and the frame of experiment 5 ----------------------------------------------------------
-exp5 = joinpath(homedir(), "ResearchData", "KrylovPseudospectra_Data", "pseudospectra", "bz_exp5",
+exp5 = joinpath(PSOUT, "bz_exp5",
     "exp5_bz.k$(KE).xi$(Ξ).$(HOST).csv")
 lines = readlines(exp5)
 hdr = split(lines[1], ',')

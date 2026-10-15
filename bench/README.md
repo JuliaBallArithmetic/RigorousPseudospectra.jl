@@ -2,7 +2,9 @@
 
 The experiments of the numerics section of the paper. They consume `RigorousPseudospectra` and
 BallArithmetic; none implements an algorithm of its own. Every output goes to
-`~/ResearchData/KrylovPseudospectra_Data/pseudospectra/`, named
+`~/ResearchData/KrylovPseudospectra_Data/pseudospectra/`, or to the directory in the environment
+variable `PSOUT` (`datadir.jl`; with it set, the figures go to `$PSOUT/figures` instead of the
+paper's), named
 `<script>.<configuration>.<host>.<ext>`, and the frame each one reports is saved with
 `save_certificate.jl` to `frames/<script>.<configuration>.N<N>.<host>.jld2` (HDF5).
 

@@ -24,12 +24,13 @@ import Serialization
 BLAS.set_num_threads(parse(Int, get(ENV, "OPENBLAS_NUM_THREADS", "1")))
 
 include(joinpath(@__DIR__, "pseudospectra_ops.jl"))
+include(joinpath(@__DIR__, "datadir.jl"))
 
-const OUT = joinpath(homedir(), "ResearchData", "KrylovPseudospectra_Data", "pseudospectra")
+const OUT = PSOUT
 const MAPDIR = joinpath(OUT, "maps")
 const HOST = readchomp(`hostname -s`)
 const FIGDIR = joinpath(@__DIR__, "figures")
-const PAPERDIR = joinpath(homedir(), "Write", "KrylovPseudospectra", "figures")
+const PAPERDIR = PAPERFIGS
 foreach(mkpath, (MAPDIR, FIGDIR, PAPERDIR))
 
 const INK = RGBf(0.15, 0.15, 0.14)

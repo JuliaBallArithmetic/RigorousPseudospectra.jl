@@ -16,10 +16,11 @@
 #   JULIA_NUM_THREADS=1 OPENBLAS_NUM_THREADS=8 julia --project=bench bench/ideal_sides.jl names
 using LinearAlgebra, Printf
 include(joinpath(@__DIR__, "pseudospectra_ops.jl"))
+include(joinpath(@__DIR__, "datadir.jl"))
 BLAS.set_num_threads(parse(Int, get(ENV, "OPENBLAS_NUM_THREADS", "8")))
 
 const HOST = readchomp(`hostname -s`)
-const OUT = joinpath(homedir(), "ResearchData", "KrylovPseudospectra_Data", "pseudospectra", "reach")
+const OUT = joinpath(PSOUT, "reach")
 mkpath(OUT)
 names = split(ARGS[1], ",")
 NSAMPLE = parse(Int, get(ENV, "NSAMPLE", "48"))

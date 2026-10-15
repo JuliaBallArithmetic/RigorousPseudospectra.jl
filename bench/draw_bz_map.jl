@@ -9,11 +9,11 @@
 using CairoMakie
 using Printf
 import Serialization
+include(joinpath(@__DIR__, "datadir.jl"))
 
-const MAPDIR = joinpath(homedir(), "ResearchData", "KrylovPseudospectra_Data", "pseudospectra",
-    "maps")
+const MAPDIR = joinpath(PSOUT, "maps")
 const FIGDIR = joinpath(@__DIR__, "figures")
-const PAPERDIR = joinpath(homedir(), "Write", "KrylovPseudospectra", "figures")
+const PAPERDIR = PAPERFIGS
 foreach(mkpath, (FIGDIR, PAPERDIR))
 
 const INK = RGBf(0.15, 0.15, 0.14)
