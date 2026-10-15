@@ -130,7 +130,10 @@ function check_circle(σ11lo, gbar::Real, g1::Real, g2::Real, c::Number, r::Real
     return CircleCheck(c, r, ok, region_ok, region, ok ? floor : 0.0, nev, m11, m22, reason)
 end
 
-function _check_arcs(σ11lo, σ22lo, gbar, g1, g2, c::ComplexF64, r::Float64, arcs0; nθ, maxdepth)
+# `pass(l11, l22) -> (floor, ok)` is the hypothesis tested with the arc-wise lower bounds; by
+# default that of thm:assembly. `_transfer_circle` (splitting.jl) tests σ11 > η alone.
+function _check_arcs(σ11lo, σ22lo, gbar, g1, g2, c::ComplexF64, r::Float64, arcs0; nθ, maxdepth,
+        pass = (l11, l22) -> assembly_floor(l11, l22, g1, g2))
     u = unit_roundoff(Float64)
     δ = mul_up(8u, add_up(abs_up(c), r))
     s22(z) = σ22lo === nothing ? sub_down(abs_down(z), gbar) : Float64(σ22lo(z))
@@ -159,7 +162,7 @@ function _check_arcs(σ11lo, σ22lo, gbar, g1, g2, c::ComplexF64, r::Float64, ar
     # refinement can pass, and finding that before any bisection saves the refinement elsewhere.
     for (θa, _, _) in arcs
         a = ev(θa)
-        _, oka = assembly_floor(a[1], a[2], g1, g2)
+        _, oka = pass(a[1], a[2])
         if !oka
             return false, 0.0, nev, a[1], a[2], :point_fails
         end
@@ -171,7 +174,7 @@ function _check_arcs(σ11lo, σ22lo, gbar, g1, g2, c::ComplexF64, r::Float64, ar
         h = add_up(mul_up(r, div_up(sub_up(θb, θa), 2.0)), δ)
         l11 = sub_down(min(a[1], b[1]), h)
         l22 = sub_down(min(a[2], b[2]), h)
-        f, fok = assembly_floor(l11, l22, g1, g2)
+        f, fok = pass(l11, l22)
         if fok
             # only the accepted arcs enter the minima: they cover Γ, and a bisected arc's own
             # (coarser) values would only make σ11, σ22 and the floor look worse than certified
@@ -183,8 +186,8 @@ function _check_arcs(σ11lo, σ22lo, gbar, g1, g2, c::ComplexF64, r::Float64, ar
             # fails at a sample, no refinement can pass and the failure is the operator's, not the
             # budget's. Otherwise the arc is bisected, unless the depth cap or the floating-point
             # resolution of the angle stops it, which is reported as such.
-            _, oka = assembly_floor(a[1], a[2], g1, g2)
-            _, okb = assembly_floor(b[1], b[2], g1, g2)
+            _, oka = pass(a[1], a[2])
+            _, okb = pass(b[1], b[2])
             θm = (θa + θb) / 2
             stop = !(oka && okb) ? :point_fails :
                    d >= maxdepth ? :maxdepth :

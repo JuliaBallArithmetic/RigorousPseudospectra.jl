@@ -434,20 +434,48 @@ end
 # Self-adjoint operators (cor:selfadj, cor:weyl, rem:lanczos)
 # ------------------------------------------------------------------------------------------------
 
-"""
-    eig_intervals(sc) -> Vector{EigInterval}
+# σ11 > etaG certified on the whole circle |z − c| = r by the cover of `check_circle`; then, by the
+# homotopy of the header, the open disc holds as many eigenvalues of G11 = Z*AZ as of mid(G)
+function _transfer_circle(sc::SplitCertificate, c, r; nθ::Int, maxdepth::Int)
+    ok, _ = _check_arcs(z -> sigma11_lo(sc, z), z -> 0.0, 0.0, 0.0, 0.0, ComplexF64(c),
+        Float64(r), [(0.0, 2π)]; nθ, maxdepth, pass = (l11, _) -> (l11, l11 > sc.etaG))
+    return ok
+end
 
-For a Hermitian A: disjoint real intervals, each holding `count` eigenvalues of G11 with
-multiplicity. The components of the inclusions of G give real intervals for the eigenvalues of G;
-since G and G11 = Z*AZ are Hermitian, Weyl's inequality puts the i-th eigenvalue of G11 within
-`‖G − G11‖ ≤ η_α` of the i-th of G, so each interval is widened by `η_α` and overlapping ones are
-merged with their counts added.
 """
-function eig_intervals(sc::SplitCertificate)
+    eig_intervals(sc; nθ = 64, maxdepth = 6) -> Vector{EigInterval}
+
+For a certificate made with `hermitian = true` (A = A*): disjoint real intervals, each holding
+`count` eigenvalues of G11 = Z*AZ with multiplicity. The eigenvalues are enclosed for the midpoint
+Ĝ of G by `verifyeigall`, which does not assume Ĝ Hermitian (it is not: it is a floating-point
+compression). Each component of the inclusions, of centre `c` and radius `r`, is surrounded by the
+circle of radius `r + μ`, `μ` half the distance to the nearest other component (`‖G11‖` bound
+`snorm` if there is none), on which `σ_min(G11 − zI) > etaG ≥ ‖Ĝ − G11‖` is certified
+([`check_circle`](@ref)'s cover); by the homotopy of the header the disc holds as many eigenvalues
+of G11 as the component holds of Ĝ. G11 is Hermitian, so they are real and lie in
+`[Re c − r − μ, Re c + r + μ]`; overlapping intervals are merged with their counts added. Empty
+when the inclusions carry no counts or a circle fails. Throws for a certificate that is not
+Hermitian.
+"""
+function eig_intervals(sc::SplitCertificate; nθ::Int = 64, maxdepth::Int = 6)
+    sc.hermitian || error("eig_intervals: not a Hermitian certificate")
     _has_counts(sc) || return EigInterval[]
-    J = sort([EigInterval(sub_down(sub_down(real(C.center), C.radius), sc.etaG),
-            add_up(add_up(real(C.center), C.radius), sc.etaG), C.count) for C in _comps(sc)];
-        by = x -> x.lo)
+    comps = _comps(sc)
+    J = EigInterval[]
+    for (i, C) in enumerate(comps)
+        gap = Inf
+        for (j, D) in enumerate(comps)
+            j == i && continue
+            gap = min(gap, sub_down(sub_down(dist_down(C.center, D.center), C.radius), D.radius))
+        end
+        μ = isfinite(gap) ? div_down(gap, 2.0) : max(sc.snorm, C.radius)
+        R = add_down(C.radius, μ)
+        (μ > 0 && R > C.radius && _transfer_circle(sc, C.center, R; nθ, maxdepth)) ||
+            return EigInterval[]
+        push!(J, EigInterval(sub_down(real(C.center), add_up(C.radius, μ)),
+            add_up(real(C.center), add_up(C.radius, μ)), C.count))
+    end
+    sort!(J; by = x -> x.lo)
     out = EigInterval[]
     for x in J
         if !isempty(out) && x.lo <= out[end].hi

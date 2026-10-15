@@ -296,6 +296,12 @@ end
         @test sc.hermitian
         tb = truth_blocks(A, sc.Q)
         @test le(opnorm(tb.G22), sc.gbar) && le(opnorm(tb.G21), out.γ̄)
+        # the intervals of G11: every eigenvalue in one, with the counts, all k of them
+        θ11 = eigvals(Hermitian(tb.G11))
+        @test !isempty(out.θ) && sum(e -> e.count, out.θ) == sc.k
+        @test all(e -> count(x -> e.lo - TOL <= x <= e.hi + TOL, θ11) == e.count, out.θ)
+        @test_throws ErrorException eig_intervals(certify_split(randn(MersenneTwister(3), 40, 40),
+            Matrix(qr(randn(MersenneTwister(4), 40, 3)).Q)))
         ev = eigvals(Symmetric(A))
         # (i): every eigenvalue of A with |λ| > ḡ lies in the union of the enclosure intervals
         @test all(x -> abs(x) <= sc.gbar || any(e -> e.lo <= x <= e.hi, out.enclosure), ev)
