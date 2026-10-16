@@ -1,7 +1,0 @@
-Rcirc=0.600: 267.6s  nsing=54 dim(Q)=134  ‖G₂₂‖=0.4446 (<R? yes ✓)  #outside=4
-  |λ|=1.0000 λ=+1.0000+0.0000i  σ_min≥1.035e-02 ✓  r_heur=3.9e-15 enclosure=1.0e-07
-  |λ|=0.6955 λ=+0.4514-0.5290i  σ_min≥1.087e-03 ✓  r_heur=1.4e-14 enclosure=1.0e-07
-  |λ|=0.6955 λ=+0.4514+0.5290i  σ_min≥1.088e-03 ✓  r_heur=1.4e-14 enclosure=1.0e-07
-  |λ|=0.6748 λ=-0.6748+0.0000i  σ_min≥3.863e-04 ✓  r_heur=2.2e-14 enclosure=1.0e-07
-Info Given IntervalArithmeticExt was explicitly requested, output will be shown live [0K
-  1 dependency had output during precompilation:

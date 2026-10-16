@@ -1,29 +1,51 @@
 """
     RigorousPseudospectra
 
-Currently exposes the **Miyajima–Rump certified eigenvalue enclosure**
-(`miyajima_rump`): a verified eigendecomposition of a dense matrix via the
-eigenvector (diagonal-residue) frame and a single two-residual certification, with
-separation clustering of coupled eigenvalues. The mathematics is in
-`miyajima_pseudospectra.tex` and the routine map in `implementation.md` (§3, §4c–4e).
+Companion code of *The reverse Ritz inclusion: computable bounds on the pseudospectra of an
+operator by those of a finite-rank compression* (I. Nisoli, `~/Write/KrylovPseudospectra/
+draft_dry.tex`). The source files follow the sections of the paper; the docstrings cite its labels.
+Everything that is not specific to the paper, the directed rounding, the norm bounds, the singular
+value enclosures, the ball products and the eigenvalue inclusions (`verifyeigall`), is
+BallArithmetic's.
 
-The pseudospectrum engine (gap ladder, box-bisection sweep, contours, plotting) is
-quarantined in `src/pseudospectra/` — dormant, not loaded — and will return once the
-eigenvalue-enclosure core is settled.
+    twoblock.jl      §2 thm:assembly, prop:blockdom, eq:farshort, prop:complete, prop:count
+                     (circle and union covers), prop:projector, cor:selfadj, cor:weyl
+    operator.jl      eq:roundA, the operator and its rounding model
+    couplings.jl     §3.3 eq:gram; α, the pencil and the factors of prop:almostortho
+    farblock.jl      §4 eq:mincert, prop:ladder, eq:sweep, sec:fpsweep (eq:epsP, lem:onestep,
+                     eq:FI, prop:fpchecks, rem:impl, alg:fpsweep)
+    frame.jl         §5.1 def:Q (two-sided frame), rem:lanczos (floating point)
+    splitting.jl     §5 the certified splitting, the counts through verifyeigall and the
+                     homotopy of prop:almostortho, cor:agree, cor:gap, the self-adjoint case
+    helper.jl        uncertified helpers: floating-point estimates of a run's parameters (the
+                     radius, the frame size, the order of the sweep) before it is made
 """
 module RigorousPseudospectra
 
-include("miyajima_rump.jl")
-include("resolvent.jl")
-include("krylov_resolvent.jl")
-include("schur_resolvent.jl")
-include("vbd.jl")
-include("poly_range.jl")
+using LinearAlgebra
+using SparseArrays
+using Random
+using BallArithmetic
 
-export miyajima_rump, refine_basis, MiyajimaRump, EigCluster
-export range_bisect, range_critical, ball_horner, PolyRange
-export free_resolvent, FreeResolvent, sigma_min_lower, resolvent_bound, row_col_gaps
-export schur_resolvent, SchurResolvent
-export vbd_solve, vbd_resolvent, VBDResolvent, block_enclosure
+include("twoblock.jl")
+include("operator.jl")
+include("couplings.jl")
+include("farblock.jl")
+include("frame.jl")
+include("splitting.jl")
+include("helper.jl")
 
-end # module
+export assembly_floor, blockdom_floor, farshort_lo, inclusion_delta
+export CircleCheck, check_circle, union_boundary_arcs, projector_bound
+export EigInterval, selfadj_enclosure, selfadj_count, weyl_pairing
+export LinOp, FrameData, frame_data, frame_alpha, isometry_bounds, compression_ball
+export epsP_up, etaP_up, onestep_up, trace_sweep, SweepSums, estimate_orders
+export FarBlockCertificate, certify_far_block
+export arnoldi, gkl, eigendirections, rrqr_frame, two_sided_frame, lanczos_frame
+export SplitCertificate, certify_split, sigma11_lo, sigma22_lo, resolvent_floor
+export pseudospectrum_outside, count_disc, count_exterior, count_union, certify_exterior
+export certify_gap, ProjectorCertificate, certify_projector
+export certify_selfadjoint, eig_intervals, coupling_hermitian
+export helper_gaps, helper_diagnose
+
+end
