@@ -399,6 +399,13 @@ function certify_exterior(sc::SplitCertificate, R::Real; nθ::Int = 64, nradii::
         found || (ok = false; push!(discs, (; center = C.center, radius = NaN,
             count = C.count, check = nothing)))
     end
+    # each closed disc lies in {|z| > R}: |c| − r > R with directed rounding. The ladder stays below
+    # rmax ≤ |c| − R, but its radii are formed in floating point, so the containment cor:agree
+    # needs is checked here rather than inferred from the construction
+    for d in discs
+        isfinite(d.radius) || continue
+        sub_down(abs_down(d.center), d.radius) > R || (ok = false)
+    end
     # the discs are pairwise disjoint by construction (r_i ≤ |c_i − c_j|/2, rounded down); recheck
     for i in eachindex(discs), j in (i + 1):length(discs)
         (isfinite(discs[i].radius) && isfinite(discs[j].radius)) || continue
