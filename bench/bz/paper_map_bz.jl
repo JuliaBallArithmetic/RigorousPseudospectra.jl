@@ -49,8 +49,8 @@ let cache = joinpath(OUT, "L_$(KE).jls")
     isfile(cache) || Serialization.serialize(cache, L)
 end
 l = noise_halfwidth(Ξ, k)
-Amul, Aadj, η, oi = make_operator(L, l)
-op = RP.LinOp(Amul, Aadj, k; epsA = 0.0, etaA = η)
+Amul, Aadj, op, oi = bz_linop(L, l)
+η = oi.eta_rel
 
 # --- the radius and the frame of experiment 5 ----------------------------------------------------------
 exp5 = joinpath(PSOUT, "bz_exp5",

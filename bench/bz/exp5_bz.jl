@@ -37,8 +37,8 @@ const DENSEMAX = 4096
 k = 2^KE
 L, _ = build_L(k)
 l = noise_halfwidth(Ξ, k)
-Amul, Aadj, η, oi = make_operator(L, l)
-op = RP.LinOp(Amul, Aadj, k; epsA = 0.0, etaA = η)
+Amul, Aadj, op, oi = bz_linop(L, l)
+η = oi.eta_rel
 dense = k <= DENSEMAX
 lam = if dense
     λ = eigvals(dense_A(L, l))
