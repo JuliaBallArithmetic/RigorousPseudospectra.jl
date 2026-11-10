@@ -1,0 +1,11 @@
+# Read by wlink, wcheck and wclone: which paper this code belongs to, and its data.
+# The paper's own facts, and where it has got to, are in ~/Write/KrylovPseudospectra/.paper.
+# The stem comes from the CODE: a Julia package name cannot be renamed freely,
+# an article directory can.
+
+# the article, in ~/Write
+write=KrylovPseudospectra
+# the working data, in ~/ResearchData (temporary)
+data=KrylovPseudospectra_Data
+# the DATA, once published: doi:10.7910/DVN/XXXXXX
+dataverse=
