@@ -487,3 +487,5 @@ end
         @test minimum(ratios) >= 1
     end
 end
+
+include("test_reproducibility.jl")

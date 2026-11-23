@@ -51,6 +51,33 @@ function _stencil_width(A::SparseMatrixCSC)
 end
 _stencil_width(A::AbstractMatrix) = size(A, 1)
 
+"Upper bound on the largest column sum of `|A|` for a sparse `A`, summed over the stored entries."
+function _max_colsum_up(A::SparseMatrixCSC)
+    vals = nonzeros(A)
+    return maximum(j -> sum_up(abs(vals[p]) for p in nzrange(A, j)), 1:size(A, 2); init = 0.0)
+end
+
+"""
+    norm_lower(Amul, n, η, ηA) -> a_lo
+
+A certified lower bound on `‖A‖` for an operator obeying `‖fl(Ay) − Ay‖ ≤ η‖y‖ + ηA`, from one
+application to the constant vector `x = (1, …, 1)`: `‖A‖ ≥ ‖Ax‖/‖x‖ ≥ (‖fl(Ax)‖ − η‖x‖ − ηA)/‖x‖`,
+with `‖fl(Ax)‖` summed rounding downward and `‖x‖ = √n` rounded upward. Used to turn an absolute
+rounding constant `η` into the relative `ε_A = η/a_lo` of eq:roundA, which then satisfies
+`ε_A a ≥ η` for every `a ≥ ‖A‖`. Errors when the bound is not positive.
+"""
+function norm_lower(Amul, n::Integer, η::Float64, ηA::Float64)
+    y = Amul(ones(n))
+    s = 0.0
+    for v in y
+        s = add_down(s, mul_down(v, v))
+    end
+    nx = sqrt_up(Float64(n))
+    a_lo = div_down(sub_down(sub_down(sqrt_down(s), mul_up(η, nx)), ηA), nx)
+    a_lo > 0 || error("norm_lower: no positive lower bound on ‖A‖ ($(a_lo))")
+    return a_lo
+end
+
 """
     LinOp(A::AbstractMatrix; T = eltype)
 

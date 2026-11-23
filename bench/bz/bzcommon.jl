@@ -22,6 +22,7 @@
 
 using RigorousInvariantMeasures
 using RigorousPseudospectra
+using RigorousPseudospectra: _max_colsum_up, norm_lower     # moved into src/operator.jl
 using LinearAlgebra, SparseArrays, Printf, Random
 import Serialization
 import BallArithmetic
@@ -80,12 +81,6 @@ function build_L(k::Integer)
         integral_preserving = Q isa RIM.IntegralPreservingDiscretizedOperator)
 end
 
-"Upper bound on the largest column sum of `|L|` for a sparse `L`, summed over the stored entries."
-function _max_colsum_up(L::SparseMatrixCSC)
-    vals = nonzeros(L)
-    return maximum(j -> sum_up(abs(vals[p]) for p in nzrange(L, j)), 1:size(L, 2); init = 0.0)
-end
-
 # ---------------------------------------------------------------------------------------------
 # the operator A = N∘L and its constant
 
@@ -115,25 +110,6 @@ function make_operator(L::SparseMatrixCSC, l::Integer)
     γN = gamma_bound(2l + 2, Float64)
     η = mul_up(normL, add_up(εL, mul_up(γN, add_up(1.0, εL))))
     return Amul, Aadj, η, (; w, εL, normL, γN, l, etaA = η, nnzL = nnz(L))
-end
-
-"""
-    norm_lower(Amul, k, η, ηA) -> a_lo
-
-A certified lower bound on ‖A‖ from one application to the constant vector x = (1, …, 1):
-‖A‖ ≥ ‖Ax‖/‖x‖ ≥ (‖fl(Ax)‖ − η‖x‖ − η_A)/‖x‖, with ‖fl(Ax)‖ summed rounding downward and
-‖x‖ = √k rounded upward. Errors when the bound is not positive.
-"""
-function norm_lower(Amul, k::Integer, η::Float64, ηA::Float64)
-    y = Amul(ones(k))
-    s = 0.0
-    for v in y
-        s = add_down(s, mul_down(v, v))
-    end
-    nx = sqrt_up(Float64(k))
-    a_lo = div_down(sub_down(sub_down(sqrt_down(s), mul_up(η, nx)), ηA), nx)
-    a_lo > 0 || error("norm_lower: no positive lower bound on ‖A‖ ($(a_lo))")
-    return a_lo
 end
 
 """
